@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">NFC Hider</string>
-    <string name="app_description">阻止选中应用检测到设备 NFC 硬件，让应用认为设备没有 NFC</string>
+    <string name="app_description">阻止选中应用检测到设备 NFC 硬件，让应用认为设备没有 NFC，但是，比如说支付宝应用，依然可以使用碰一碰。可能是没有hook这个。</string>
 </resources>
