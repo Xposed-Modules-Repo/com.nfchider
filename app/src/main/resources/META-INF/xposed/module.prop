@@ -4,4 +4,4 @@ description=Hides NFC (Near Field Communication) from selected apps on Android. 
 version=1.1
 versionCode=1
 minApiVersion=101
-targetApiVersion=101
+targetApiVersion=102

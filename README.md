@@ -30,7 +30,7 @@ The debug APK will be at `app/build/outputs/apk/debug/NfcHider-debug.apk`.
 
 > **Note:** The project uses Jetpack Compose for the settings UI. Building requires:
 > - JDK 17+
-> - Android SDK 34+
+> - Android SDK 37+
 
 ## Download
 

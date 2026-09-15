@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.nfchider"
-    compileSdk = 34
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.nfchider"
         minSdk = 29
-        targetSdk = 34
+        targetSdk = 37
         versionCode = 2
         versionName = "1.1"
     }
@@ -62,7 +62,7 @@ configurations.implementation {
 }
 
 dependencies {
-    compileOnly("io.github.libxposed:api:101.0.1")
+    compileOnly("io.github.libxposed:api:102.0.0")
 
     val composeBom = platform("androidx.compose:compose-bom:2024.02.00")
     implementation(composeBom)
