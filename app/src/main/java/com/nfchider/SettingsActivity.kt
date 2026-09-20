@@ -1,5 +1,6 @@
 package com.nfchider
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -48,6 +49,7 @@ fun MainScreen() {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             ModuleStatusCard()
+            LocationSimCard()
             HookCategoriesCard()
             TargetAppCard()
             AboutCard()
@@ -65,18 +67,18 @@ fun ModuleStatusCard() {
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Module Status",
+                text = "模块状态",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "Status: ",
+                    text = "运行状态：",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    text = "Active",
+                    text = "已激活",
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.bodyMedium
@@ -84,10 +86,39 @@ fun ModuleStatusCard() {
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Version: 1.0",
+                text = "版本：${BuildConfig.VERSION_NAME}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+@Composable
+fun LocationSimCard() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "位置模拟",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "在地图上绘制轨迹，让勾选的应用看到沿轨迹匀速移动的 GPS 位置。支持循环 / 往返 / 单次播放、速度调节与 GPX 导入。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = {
+                    context.startActivity(Intent(context, MapActivity::class.java))
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("打开地图轨迹模拟")
+            }
         }
     }
 }
@@ -97,21 +128,21 @@ fun HookCategoriesCard() {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Hook Categories",
+                text = "拦截分类",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(8.dp))
 
-            CategoryItem("PackageManager", "Block NFC package/feature queries")
+            CategoryItem("包管理器 (PackageManager)", "拦截 NFC 软件包与系统特性查询")
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            CategoryItem("NfcAdapter / NfcManager", "Block NFC hardware API access")
+            CategoryItem("NFC 适配器 (NfcAdapter / NfcManager)", "拦截 NFC 硬件 API 访问")
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            CategoryItem("Filesystem", "Block NFC file/directory access")
+            CategoryItem("文件系统 (Filesystem)", "拦截 NFC 设备节点与驱动文件访问")
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            CategoryItem("Shell / Process", "Block NFC shell commands")
+            CategoryItem("Shell 进程 (Shell / Process)", "拦截 NFC 底层 Shell 命令执行")
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            CategoryItem("Settings", "Block NFC system settings queries")
+            CategoryItem("系统设置 (Settings)", "拦截 NFC 系统设置项读取与查询")
         }
     }
 }
@@ -137,19 +168,19 @@ fun TargetAppCard() {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Target Applications",
+                text = "目标应用",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Select apps in LSPosed scope settings",
+                text = "请在 LSPosed / Xposed 管理器中配置作用域",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Hooks are applied to all apps selected in LSPosed scope.",
+                text = "模块会自动对在作用域中勾选的所有应用生效。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -162,13 +193,13 @@ fun AboutCard() {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "About",
+                text = "关于",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Prevents selected apps from detecting the device's NFC hardware by hooking NFC-related Android APIs at the framework level. Select target apps in LSPosed scope settings.",
+                text = "在系统框架层 Hook 拦截 NFC 相关 Android API，防止目标应用检测到设备的 NFC 硬件。同时支持模拟自定义地图轨迹的 GPS 移动位置。请在 LSPosed 作用域中勾选需要生效的目标应用。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

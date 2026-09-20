@@ -11,8 +11,12 @@ android {
         applicationId = "com.nfchider"
         minSdk = 29
         targetSdk = 37
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
+    }
+
+    androidResources {
+        localeFilters += listOf("zh", "en")
     }
 
     signingConfigs {
@@ -36,7 +40,8 @@ android {
             signingConfig = signingConfigs.findByName("ciDebug")
         }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -54,6 +59,18 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    packaging {
+        resources {
+            excludes += listOf(
+                "META-INF/*.version",
+                "META-INF/DEPENDENCIES",
+                "META-INF/**/LICENSE*",
+                "META-INF/**/NOTICE*"
+            )
+        }
     }
 }
 
@@ -63,12 +80,16 @@ configurations.implementation {
 
 dependencies {
     compileOnly("io.github.libxposed:api:102.0.0")
+    implementation("io.github.libxposed:service:102.0.0")
 
-    val composeBom = platform("androidx.compose:compose-bom:2024.02.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.activity:activity-compose:1.8.2")
+    implementation("androidx.activity:activity-compose:1.13.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
 }
