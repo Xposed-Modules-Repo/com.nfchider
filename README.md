@@ -73,7 +73,7 @@ cd com.nfchider
 ```
 
 编译输出目录：
-- `app/build/outputs/apk/release/NfcHider-1.2.apk`
+- `app/build/outputs/apk/release/NfcHider-3-1.2.apk`
 
 ---
 

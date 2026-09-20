@@ -74,7 +74,7 @@ android {
     }
 
     base {
-        archivesName.set("NfcHider-${defaultConfig.versionName}")
+        archivesName.set("NfcHider-${defaultConfig.versionCode}-${defaultConfig.versionName}")
     }
 }
 
@@ -82,11 +82,11 @@ tasks.matching { it.name == "assembleRelease" }.configureEach {
     doLast {
         val buildDir = layout.buildDirectory.get().asFile
         val apkDir = File(buildDir, "outputs/apk/release")
+        val vCode = android.defaultConfig.versionCode
         val vName = android.defaultConfig.versionName
         apkDir.listFiles()?.forEach { file ->
             if (file.name.endsWith(".apk")) {
-                file.copyTo(File(apkDir, "NfcHider-$vName.apk"), overwrite = true)
-                file.copyTo(File(apkDir, "NfcHider-v$vName.apk"), overwrite = true)
+                file.copyTo(File(apkDir, "NfcHider-$vCode-$vName.apk"), overwrite = true)
             }
         }
     }
