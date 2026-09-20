@@ -41,12 +41,13 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p artifacts
-          cp app/build/outputs/apk/release/*.apk artifacts/NfcHider-release.apk
+          cp app/build/outputs/apk/release/NfcHider-v*.apk artifacts/
+          rm -f artifacts/*-release.apk || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NfcHider-release-${{ github.run_number }}
+          name: NfcHider-${{ github.run_number }}
           path: artifacts/
 
 
@@ -85,7 +86,7 @@ jobs:
         with:
           tag_name: latest
           name: Latest Release
-          files: artifacts/NfcHider-release.apk
+          files: artifacts/*.apk
           generate_release_notes: true
           draft: false
           prerelease: false

@@ -72,6 +72,23 @@ android {
             )
         }
     }
+
+    base {
+        archivesName.set("NfcHider-v${defaultConfig.versionName}")
+    }
+}
+
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    doLast {
+        val buildDir = layout.buildDirectory.get().asFile
+        val apkDir = File(buildDir, "outputs/apk/release")
+        val vName = android.defaultConfig.versionName
+        apkDir.listFiles()?.forEach { file ->
+            if (file.name.endsWith(".apk") && !file.name.equals("NfcHider-v$vName.apk")) {
+                file.copyTo(File(apkDir, "NfcHider-v$vName.apk"), overwrite = true)
+            }
+        }
+    }
 }
 
 configurations.implementation {

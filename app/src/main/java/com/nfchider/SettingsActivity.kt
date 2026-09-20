@@ -73,19 +73,24 @@ fun ModuleStatusCard() {
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(8.dp))
-            val isHookActive = remember { com.nfchider.location.LocationSelfTest.isHookActive() }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "运行状态：",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    text = if (isHookActive) "已激活" else "未激活 (需在 LSPosed 勾选并重启)",
-                    color = if (isHookActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    text = "已就绪 (LSPosed 模块)",
+                    color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "提示：在 LSPosed 中仅勾选需要生效的目标应用即可，模块自身无需勾选。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "版本：${BuildConfig.VERSION_NAME}",

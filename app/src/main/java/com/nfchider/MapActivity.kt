@@ -360,7 +360,7 @@ fun LocationSimScreen() {
                         )
                     }
 
-                    // 模拟生效状态检测条
+                    // 模拟运行状态与广播实时查看条
                     val report = diagnosticReport
                     Surface(
                         modifier = Modifier
@@ -368,10 +368,9 @@ fun LocationSimScreen() {
                             .clickable { showDiagnosticDialog = true },
                         shape = RoundedCornerShape(8.dp),
                         color = when (report.status) {
-                            LocationSelfTest.TestStatus.SUCCESS -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
-                            LocationSelfTest.TestStatus.FAILED_REAL_LOC,
-                            LocationSelfTest.TestStatus.HOOK_INACTIVE -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
-                            else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
+                            LocationSelfTest.TestStatus.BROADCASTING -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
+                            LocationSelfTest.TestStatus.ROUTE_NOT_READY -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f)
+                            LocationSelfTest.TestStatus.SIM_DISABLED -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)
                         }
                     ) {
                         Row(
@@ -380,29 +379,32 @@ fun LocationSimScreen() {
                         ) {
                             Icon(
                                 imageVector = when (report.status) {
-                                    LocationSelfTest.TestStatus.SUCCESS -> Icons.Filled.CheckCircle
-                                    LocationSelfTest.TestStatus.FAILED_REAL_LOC,
-                                    LocationSelfTest.TestStatus.HOOK_INACTIVE -> Icons.Filled.Warning
-                                    else -> Icons.Filled.Info
+                                    LocationSelfTest.TestStatus.BROADCASTING -> Icons.Filled.CheckCircle
+                                    LocationSelfTest.TestStatus.ROUTE_NOT_READY -> Icons.Filled.Warning
+                                    LocationSelfTest.TestStatus.SIM_DISABLED -> Icons.Filled.Info
                                 },
                                 contentDescription = null,
                                 tint = when (report.status) {
-                                    LocationSelfTest.TestStatus.SUCCESS -> MaterialTheme.colorScheme.primary
-                                    LocationSelfTest.TestStatus.FAILED_REAL_LOC,
-                                    LocationSelfTest.TestStatus.HOOK_INACTIVE -> MaterialTheme.colorScheme.error
-                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    LocationSelfTest.TestStatus.BROADCASTING -> MaterialTheme.colorScheme.primary
+                                    LocationSelfTest.TestStatus.ROUTE_NOT_READY -> MaterialTheme.colorScheme.secondary
+                                    LocationSelfTest.TestStatus.SIM_DISABLED -> MaterialTheme.colorScheme.onSurfaceVariant
                                 },
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "生效检测：${report.summaryText}",
+                                    text = "模拟状态：${report.summaryText}",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold
                                 )
+                                val liveText = if (config.enabled && simPos != null) {
+                                    "广播中: ${String.format("%.5f, %.5f", simPos!!.lat, simPos!!.lng)} | ${String.format("%.1f", simPos!!.speedMps)} m/s"
+                                } else {
+                                    report.detailText
+                                }
                                 Text(
-                                    text = report.detailText,
+                                    text = liveText,
                                     style = MaterialTheme.typography.bodySmall,
                                     maxLines = 1,
                                     fontSize = 11.sp,
@@ -411,7 +413,7 @@ fun LocationSimScreen() {
                             }
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "点击自测 >",
+                                text = "查看详情 >",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold
@@ -668,22 +670,20 @@ fun DiagnosticDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = when (report.status) {
-                        LocationSelfTest.TestStatus.SUCCESS -> Icons.Filled.CheckCircle
-                        LocationSelfTest.TestStatus.FAILED_REAL_LOC,
-                        LocationSelfTest.TestStatus.HOOK_INACTIVE -> Icons.Filled.Warning
-                        else -> Icons.Filled.Info
+                        LocationSelfTest.TestStatus.BROADCASTING -> Icons.Filled.CheckCircle
+                        LocationSelfTest.TestStatus.ROUTE_NOT_READY -> Icons.Filled.Warning
+                        LocationSelfTest.TestStatus.SIM_DISABLED -> Icons.Filled.Info
                     },
                     contentDescription = null,
                     tint = when (report.status) {
-                        LocationSelfTest.TestStatus.SUCCESS -> MaterialTheme.colorScheme.primary
-                        LocationSelfTest.TestStatus.FAILED_REAL_LOC,
-                        LocationSelfTest.TestStatus.HOOK_INACTIVE -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        LocationSelfTest.TestStatus.BROADCASTING -> MaterialTheme.colorScheme.primary
+                        LocationSelfTest.TestStatus.ROUTE_NOT_READY -> MaterialTheme.colorScheme.secondary
+                        LocationSelfTest.TestStatus.SIM_DISABLED -> MaterialTheme.colorScheme.onSurfaceVariant
                     },
                     modifier = Modifier.size(24.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("位置模拟生效检测")
+                Text("模拟运行状态与说明")
             }
         },
         text = {
@@ -691,10 +691,9 @@ fun DiagnosticDialog(
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = when (report.status) {
-                            LocationSelfTest.TestStatus.SUCCESS -> MaterialTheme.colorScheme.primaryContainer
-                            LocationSelfTest.TestStatus.FAILED_REAL_LOC,
-                            LocationSelfTest.TestStatus.HOOK_INACTIVE -> MaterialTheme.colorScheme.errorContainer
-                            else -> MaterialTheme.colorScheme.surfaceVariant
+                            LocationSelfTest.TestStatus.BROADCASTING -> MaterialTheme.colorScheme.primaryContainer
+                            LocationSelfTest.TestStatus.ROUTE_NOT_READY -> MaterialTheme.colorScheme.secondaryContainer
+                            LocationSelfTest.TestStatus.SIM_DISABLED -> MaterialTheme.colorScheme.surfaceVariant
                         }
                     ),
                     modifier = Modifier.fillMaxWidth()
@@ -713,13 +712,8 @@ fun DiagnosticDialog(
                     }
                 }
 
-                Text("核心指标自检：", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Text("核心指标：", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
 
-                DiagnosticItem(
-                    label = "Xposed 框架 Hook 注入",
-                    value = if (report.isHookActive) "已注入 (正常)" else "未注入 (未激活)",
-                    isOk = report.isHookActive
-                )
                 DiagnosticItem(
                     label = "模拟运行开关",
                     value = if (report.isSimEnabled) "已开启" else "未开启",
@@ -732,52 +726,52 @@ fun DiagnosticDialog(
                 )
                 DiagnosticItem(
                     label = "配置同步通道",
-                    value = if (report.isChannelBound) "LSPosed 远程偏好" else "文件持久化兜底",
+                    value = if (report.isChannelBound) "LSPosed 远程通道" else "本地持久化就绪",
                     isOk = true
                 )
 
-                HorizontalDivider()
+                if (report.expectedPos != null) {
+                    DiagnosticItem(
+                        label = "当前广播坐标",
+                        value = "${String.format("%.5f, %.5f", report.expectedPos.lat, report.expectedPos.lng)}",
+                        isOk = true
+                    )
+                }
 
-                Text("系统定位回读自测：", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "💡 LSPosed 作用域说明",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "1. 模块本身作为控制器，无需也不能在 LSPosed 中勾选。\n2. 请在 LSPosed 中勾选需要使用模拟位置的目标应用（如打卡软件、高德地图等）。\n3. 勾选后，在系统设置中对目标应用点击「强行停止」再重新打开，即可生效模拟定位！",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
                 if (report.actualLocation != null) {
                     Text(
-                        text = "系统实际返回经纬度：${String.format("%.5f, %.5f", report.actualLocation.latitude, report.actualLocation.longitude)}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                } else {
-                    Text(
-                        text = "系统实际返回经纬度：暂未读取到系统定位",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "手机当前真实 GPS: ${String.format("%.5f, %.5f", report.actualLocation.latitude, report.actualLocation.longitude)} (本模块未勾选自身，故返回真实 GPS；目标应用已被 Hook 替换为模拟坐标)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
                     )
                 }
-
-                if (report.expectedPos != null) {
-                    Text(
-                        text = "当前模拟期望经纬度：${String.format("%.5f, %.5f", report.expectedPos.lat, report.expectedPos.lng)}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-
-                if (report.distanceDiffMeters != null) {
-                    val diff = report.distanceDiffMeters
-                    Text(
-                        text = "两者坐标偏差距离：${if (diff < 1000) "${diff.roundToInt()} 米" else String.format("%.2f 公里", diff / 1000)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                Text(
-                    text = "排查指南：\n1. 请确保在 LSPosed / Xposed 中勾选了目标应用和 NFC Hider。\n2. 勾选或修改作用域后，必须先在系统设置中「强行停止」目标应用并重新启动。\n3. 在本界面先点击「开始模拟」再打开目标应用。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         },
         confirmButton = {
             Button(onClick = onRefresh) {
-                Text(if (!report.hasPermission) "授予权限并自测" else "重新自测")
+                Text(if (!report.hasPermission) "读取真实 GPS 对比" else "刷新状态")
             }
         },
         dismissButton = {
