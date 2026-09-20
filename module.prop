@@ -1,7 +1,7 @@
 name=NFC Hider
 author=furina707
 description=对选中应用隐藏 NFC 硬件并支持地图轨迹 GPS 位置模拟。支持 Android 10+。
-version=1.3
-versionCode=4
+version=1.2
+versionCode=3
 minApiVersion=101
 targetApiVersion=102
