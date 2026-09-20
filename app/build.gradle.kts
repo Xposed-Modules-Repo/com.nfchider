@@ -11,8 +11,8 @@ android {
         applicationId = "com.nfchider"
         minSdk = 29
         targetSdk = 37
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
     }
 
     androidResources {
@@ -74,7 +74,7 @@ android {
     }
 
     base {
-        archivesName.set("NfcHider-v${defaultConfig.versionName}")
+        archivesName.set("NfcHider-${defaultConfig.versionName}")
     }
 }
 
@@ -84,7 +84,8 @@ tasks.matching { it.name == "assembleRelease" }.configureEach {
         val apkDir = File(buildDir, "outputs/apk/release")
         val vName = android.defaultConfig.versionName
         apkDir.listFiles()?.forEach { file ->
-            if (file.name.endsWith(".apk") && !file.name.equals("NfcHider-v$vName.apk")) {
+            if (file.name.endsWith(".apk")) {
+                file.copyTo(File(apkDir, "NfcHider-$vName.apk"), overwrite = true)
                 file.copyTo(File(apkDir, "NfcHider-v$vName.apk"), overwrite = true)
             }
         }

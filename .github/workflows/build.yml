@@ -38,11 +38,18 @@ jobs:
         run: |
           ./gradlew assembleRelease --no-daemon
 
+      - name: Extract module version
+        id: get_version
+        run: |
+          VERSION=$(grep '^version=' module.prop | cut -d'=' -f2 | tr -d '\r')
+          VERSION_CODE=$(grep '^versionCode=' module.prop | cut -d'=' -f2 | tr -d '\r')
+          echo "tag=${VERSION_CODE}-${VERSION}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
       - name: Collect APK
         run: |
           mkdir -p artifacts
-          cp app/build/outputs/apk/release/NfcHider-v*.apk artifacts/
-          rm -f artifacts/*-release.apk || true
+          cp app/build/outputs/apk/release/NfcHider-*.apk artifacts/
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -50,15 +57,12 @@ jobs:
           name: NfcHider-${{ github.run_number }}
           path: artifacts/
 
-
       - name: Package source code (all files)
         run: |
-          # 打包当前目录所有文件（不包括输出文件自身）
           mkdir -p artifacts
           zip -r artifacts/NfcHider-source.zip . -x 'artifacts/NfcHider-source.zip'
           echo "All files packaged (including hidden files)"
-      
-      
+
       # 删除旧的 Actions 运行历史（保留最近 1 次）
       - name: Delete old workflow runs
         uses: Mattraks/delete-workflow-runs@v2
@@ -67,25 +71,13 @@ jobs:
           repository: ${{ github.repository }}
           retain_days: 0
           keep_minimum_runs: 1
-      
-      # 删除所有旧的 Release
-      - name: Delete all old Releases
-        run: |
-          gh release list --limit 100 --json tagName -q '.[].tagName' |
-          while read tag; do
-            echo "Deleting release: $tag"
-            gh release delete "$tag" --yes || true
-            git push --delete origin "$tag" 2>/dev/null || true
-          done
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 创建新的 Release
+      # 按照 Xposed-Modules-Repo 规范创建新 Release
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: Latest Release
+          tag_name: ${{ steps.get_version.outputs.tag }}
+          name: ${{ steps.get_version.outputs.version }}
           files: artifacts/*.apk
           generate_release_notes: true
           draft: false
