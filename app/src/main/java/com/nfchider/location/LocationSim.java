@@ -99,6 +99,12 @@ public final class LocationSim {
         } catch (Throwable t) {
             log(api, "fused hook failed: " + t);
         }
+        try {
+            Method m = com.nfchider.LocationHook.class.getDeclaredMethod("isHookActive");
+            api.hook(m).setExceptionMode(ExceptionMode.PROTECTIVE)
+                    .intercept(chain -> Boolean.TRUE);
+        } catch (Throwable ignored) {
+        }
         log(api, "location simulation hooks installed");
     }
 
@@ -135,25 +141,28 @@ public final class LocationSim {
     private static int classifyLocationManagerMethod(Method m) {
         String n = m.getName();
         Class<?>[] p = m.getParameterTypes();
-        boolean listener = p.length > 0 && p[p.length - 1] == LocationListener.class;
-        boolean pi = p.length > 0 && p[p.length - 1] == PendingIntent.class;
+        boolean hasListener = false;
+        boolean hasPi = false;
+        for (Class<?> c : p) {
+            if (LocationListener.class.isAssignableFrom(c)) hasListener = true;
+            if (PendingIntent.class.isAssignableFrom(c)) hasPi = true;
+        }
         switch (n) {
             case "getLastKnownLocation":
-                return p.length == 1 && p[0] == String.class ? K_LAST_KNOWN : K_NONE;
+                return p.length >= 1 && p[0] == String.class ? K_LAST_KNOWN : K_NONE;
             case "getCurrentLocation":
                 for (Class<?> c : p) if (c == Consumer.class) return K_GET_CURRENT;
                 return K_NONE;
             case "requestLocationUpdates":
-                if (listener) return K_REQ_UPDATES_LISTENER;
-                if (pi) return K_REQ_UPDATES_PI;
+                if (hasListener) return K_REQ_UPDATES_LISTENER;
+                if (hasPi) return K_REQ_UPDATES_PI;
                 return K_NONE;
             case "requestSingleUpdate":
-                for (Class<?> c : p) if (c == LocationListener.class) return K_SINGLE_UPDATE_LISTENER;
-                for (Class<?> c : p) if (c == PendingIntent.class) return K_SINGLE_UPDATE_PI;
+                if (hasListener) return K_SINGLE_UPDATE_LISTENER;
+                if (hasPi) return K_SINGLE_UPDATE_PI;
                 return K_NONE;
             case "removeUpdates":
-                return (p.length == 1 && (p[0] == LocationListener.class || p[0] == PendingIntent.class))
-                        ? K_REMOVE_UPDATES : K_NONE;
+                return (hasListener || hasPi || p.length == 1) ? K_REMOVE_UPDATES : K_NONE;
             case "isProviderEnabled":
                 return p.length == 1 && p[0] == String.class ? K_IS_PROVIDER_ENABLED : K_NONE;
             case "isLocationEnabled":
@@ -161,7 +170,7 @@ public final class LocationSim {
             case "getProviders":
                 return p.length == 1 && p[0] == boolean.class ? K_GET_PROVIDERS : K_NONE;
             case "getBestProvider":
-                return p.length == 2 ? K_GET_BEST_PROVIDER : K_NONE;
+                return p.length >= 1 ? K_GET_BEST_PROVIDER : K_NONE;
             default:
                 return K_NONE;
         }
@@ -196,23 +205,25 @@ public final class LocationSim {
     private static Object handleLocationManager(Chain chain, int kind) throws Throwable {
         switch (kind) {
             case K_LAST_KNOWN: {
-                Object provider = chain.getArg(0);
                 TrajectoryConfig cfg = ConfigStore.get();
-                if (provider == null || cfg == null || !cfg.enabled || !cfg.hasRoute()) {
+                if (cfg == null || !cfg.enabled || !cfg.hasRoute()) {
                     return chain.proceed();
                 }
-                return buildLocation(cfg, (String) provider);
+                Object providerArg = chain.getArg(0);
+                String provider = providerArg instanceof String ? (String) providerArg : LocationManager.GPS_PROVIDER;
+                return buildLocation(cfg, provider);
             }
             case K_GET_CURRENT: {
                 TrajectoryConfig cfg = ConfigStore.get();
                 if (cfg == null || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
                 List<Object> args = chain.getArgs();
-                String provider = args.get(0) instanceof String ? (String) args.get(0) : "gps";
+                String provider = "gps";
                 Consumer<Location> consumer = null;
                 Executor executor = null;
                 Looper looper = null;
                 for (Object a : args) {
-                    if (a instanceof Consumer && consumer == null) consumer = (Consumer<Location>) a;
+                    if (a instanceof String) provider = (String) a;
+                    else if (a instanceof Consumer && consumer == null) consumer = (Consumer<Location>) a;
                     else if (a instanceof Executor && executor == null) executor = (Executor) a;
                     else if (a instanceof Looper && looper == null) looper = (Looper) a;
                 }
@@ -224,14 +235,17 @@ public final class LocationSim {
                 TrajectoryConfig cfg = ConfigStore.get();
                 if (cfg == null || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
                 List<Object> args = chain.getArgs();
-                LocationListener listener = (LocationListener) args.get(args.size() - 1);
-                String provider = args.get(0) instanceof String ? (String) args.get(0) : LocationManager.GPS_PROVIDER;
+                LocationListener listener = null;
+                String provider = LocationManager.GPS_PROVIDER;
                 Executor executor = null;
                 Looper looper = null;
                 for (Object a : args) {
-                    if (a instanceof Executor && executor == null) executor = (Executor) a;
+                    if (a instanceof LocationListener && listener == null) listener = (LocationListener) a;
+                    else if (a instanceof String) provider = (String) a;
+                    else if (a instanceof Executor && executor == null) executor = (Executor) a;
                     else if (a instanceof Looper && looper == null) looper = (Looper) a;
                 }
+                if (listener == null) return chain.proceed();
                 if (looper == null) looper = Looper.myLooper();
                 deliverToListener(listener, provider, executor, looper);
                 return null;
@@ -240,9 +254,15 @@ public final class LocationSim {
                 TrajectoryConfig cfg = ConfigStore.get();
                 if (cfg == null || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
                 List<Object> args = chain.getArgs();
-                PendingIntent pi = (PendingIntent) args.get(args.size() - 1);
-                String provider = args.get(0) instanceof String ? (String) args.get(0) : LocationManager.GPS_PROVIDER;
-                startLoop(pi, provider, loc -> sendViaPendingIntent(pi, loc));
+                PendingIntent pi = null;
+                String provider = LocationManager.GPS_PROVIDER;
+                for (Object a : args) {
+                    if (a instanceof PendingIntent && pi == null) pi = (PendingIntent) a;
+                    else if (a instanceof String) provider = (String) a;
+                }
+                if (pi == null) return chain.proceed();
+                final PendingIntent finalPi = pi;
+                startLoop(pi, provider, loc -> sendViaPendingIntent(finalPi, loc));
                 return null;
             }
             case K_SINGLE_UPDATE_LISTENER: {

@@ -13,12 +13,15 @@ import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam;
  */
 public class LocationHook extends XposedModule {
 
+    /**
+     * Diagnostic probe: returns false by default, hooked by LocationSim to return true.
+     */
+    public static boolean isHookActive() {
+        return false;
+    }
+
     @Override
     public void onPackageLoaded(@NonNull PackageLoadedParam param) {
-        try {
-            if (getModuleApplicationInfo().packageName.equals(param.getPackageName())) return;
-        } catch (Throwable ignored) {
-        }
         LocationSim.install(this, param);
     }
 }

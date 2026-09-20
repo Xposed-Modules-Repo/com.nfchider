@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -25,10 +26,19 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Place
+import android.Manifest
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +50,7 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -58,6 +69,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.nfchider.location.ModuleService
 import com.nfchider.location.SimConfigRepository
 import com.nfchider.location.TrajectoryConfig
+import com.nfchider.location.LocationSelfTest
 import com.nfchider.location.TrajectoryEngine
 import com.nfchider.ui.theme.NfcHiderTheme
 import kotlinx.coroutines.delay
@@ -93,11 +105,25 @@ fun LocationSimScreen() {
     var simPos by remember { mutableStateOf<TrajectoryEngine.Position?>(null) }
     var channelBound by remember { mutableStateOf(ModuleService.bound) }
 
+    var showDiagnosticDialog by remember { mutableStateOf(false) }
+    var diagnosticReport by remember { mutableStateOf(LocationSelfTest.runDiagnostics(context, config)) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        diagnosticReport = LocationSelfTest.runDiagnostics(context, config)
+    }
+
+    LaunchedEffect(config.enabled, config.points.size, channelBound) {
+        diagnosticReport = LocationSelfTest.runDiagnostics(context, config)
+    }
+
     val update: ((TrajectoryConfig.Builder) -> Unit) -> Unit = { transform ->
         val builder = config.toBuilder()
         transform(builder)
         config = builder.build()
         SimConfigRepository.save(context, config)
+        diagnosticReport = LocationSelfTest.runDiagnostics(context, config)
     }
 
     // ------------------------------------------------------------------
@@ -334,6 +360,65 @@ fun LocationSimScreen() {
                         )
                     }
 
+                    // 模拟生效状态检测条
+                    val report = diagnosticReport
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showDiagnosticDialog = true },
+                        shape = RoundedCornerShape(8.dp),
+                        color = when (report.status) {
+                            LocationSelfTest.TestStatus.SUCCESS -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
+                            LocationSelfTest.TestStatus.FAILED_REAL_LOC,
+                            LocationSelfTest.TestStatus.HOOK_INACTIVE -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
+                            else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = when (report.status) {
+                                    LocationSelfTest.TestStatus.SUCCESS -> Icons.Filled.CheckCircle
+                                    LocationSelfTest.TestStatus.FAILED_REAL_LOC,
+                                    LocationSelfTest.TestStatus.HOOK_INACTIVE -> Icons.Filled.Warning
+                                    else -> Icons.Filled.Info
+                                },
+                                contentDescription = null,
+                                tint = when (report.status) {
+                                    LocationSelfTest.TestStatus.SUCCESS -> MaterialTheme.colorScheme.primary
+                                    LocationSelfTest.TestStatus.FAILED_REAL_LOC,
+                                    LocationSelfTest.TestStatus.HOOK_INACTIVE -> MaterialTheme.colorScheme.error
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "生效检测：${report.summaryText}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = report.detailText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "点击自测 >",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
                     // Speed
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(text = "速度", style = MaterialTheme.typography.labelMedium)
@@ -459,6 +544,25 @@ fun LocationSimScreen() {
                     )
                 }
             }
+
+            if (showDiagnosticDialog) {
+                DiagnosticDialog(
+                    report = diagnosticReport,
+                    onDismiss = { showDiagnosticDialog = false },
+                    onRefresh = {
+                        if (!diagnosticReport.hasPermission) {
+                            permissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
+                        } else {
+                            diagnosticReport = LocationSelfTest.runDiagnostics(context, config)
+                        }
+                    }
+                )
+            }
         }
     }
 }
@@ -551,3 +655,153 @@ private fun parseGpx(input: InputStream?): List<TrajectoryConfig.Point> {
     raw.last().let { result.add(TrajectoryConfig.Point(it[0], it[1], it[2])) }
     return result
 }
+
+@Composable
+fun DiagnosticDialog(
+    report: LocationSelfTest.DiagnosticReport,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = when (report.status) {
+                        LocationSelfTest.TestStatus.SUCCESS -> Icons.Filled.CheckCircle
+                        LocationSelfTest.TestStatus.FAILED_REAL_LOC,
+                        LocationSelfTest.TestStatus.HOOK_INACTIVE -> Icons.Filled.Warning
+                        else -> Icons.Filled.Info
+                    },
+                    contentDescription = null,
+                    tint = when (report.status) {
+                        LocationSelfTest.TestStatus.SUCCESS -> MaterialTheme.colorScheme.primary
+                        LocationSelfTest.TestStatus.FAILED_REAL_LOC,
+                        LocationSelfTest.TestStatus.HOOK_INACTIVE -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("位置模拟生效检测")
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = when (report.status) {
+                            LocationSelfTest.TestStatus.SUCCESS -> MaterialTheme.colorScheme.primaryContainer
+                            LocationSelfTest.TestStatus.FAILED_REAL_LOC,
+                            LocationSelfTest.TestStatus.HOOK_INACTIVE -> MaterialTheme.colorScheme.errorContainer
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = report.summaryText,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = report.detailText,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                Text("核心指标自检：", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+
+                DiagnosticItem(
+                    label = "Xposed 框架 Hook 注入",
+                    value = if (report.isHookActive) "已注入 (正常)" else "未注入 (未激活)",
+                    isOk = report.isHookActive
+                )
+                DiagnosticItem(
+                    label = "模拟运行开关",
+                    value = if (report.isSimEnabled) "已开启" else "未开启",
+                    isOk = report.isSimEnabled
+                )
+                DiagnosticItem(
+                    label = "轨迹就绪状态",
+                    value = if (report.hasRoute) "已就绪" else "点数不足",
+                    isOk = report.hasRoute
+                )
+                DiagnosticItem(
+                    label = "配置同步通道",
+                    value = if (report.isChannelBound) "LSPosed 远程偏好" else "文件持久化兜底",
+                    isOk = true
+                )
+
+                HorizontalDivider()
+
+                Text("系统定位回读自测：", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                if (report.actualLocation != null) {
+                    Text(
+                        text = "系统实际返回经纬度：${String.format("%.5f, %.5f", report.actualLocation.latitude, report.actualLocation.longitude)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    Text(
+                        text = "系统实际返回经纬度：暂未读取到系统定位",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                if (report.expectedPos != null) {
+                    Text(
+                        text = "当前模拟期望经纬度：${String.format("%.5f, %.5f", report.expectedPos.lat, report.expectedPos.lng)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                if (report.distanceDiffMeters != null) {
+                    val diff = report.distanceDiffMeters
+                    Text(
+                        text = "两者坐标偏差距离：${if (diff < 1000) "${diff.roundToInt()} 米" else String.format("%.2f 公里", diff / 1000)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Text(
+                    text = "排查指南：\n1. 请确保在 LSPosed / Xposed 中勾选了目标应用和 NFC Hider。\n2. 勾选或修改作用域后，必须先在系统设置中「强行停止」目标应用并重新启动。\n3. 在本界面先点击「开始模拟」再打开目标应用。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onRefresh) {
+                Text(if (!report.hasPermission) "授予权限并自测" else "重新自测")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
+}
+
+@Composable
+private fun DiagnosticItem(label: String, value: String, isOk: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = label, style = MaterialTheme.typography.bodySmall)
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Bold,
+            color = if (isOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+        )
+    }
+}
+

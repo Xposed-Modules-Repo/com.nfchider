@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -72,14 +73,15 @@ fun ModuleStatusCard() {
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(8.dp))
+            val isHookActive = remember { com.nfchider.location.LocationSelfTest.isHookActive() }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "运行状态：",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    text = "已激活",
-                    color = MaterialTheme.colorScheme.primary,
+                    text = if (isHookActive) "已激活" else "未激活 (需在 LSPosed 勾选并重启)",
+                    color = if (isHookActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.bodyMedium
                 )
