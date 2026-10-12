@@ -84,9 +84,11 @@ tasks.matching { it.name == "assembleRelease" }.configureEach {
         val apkDir = File(buildDir, "outputs/apk/release")
         val vCode = android.defaultConfig.versionCode
         val vName = android.defaultConfig.versionName
+        val targetApk = File(apkDir, "NfcHider-$vCode-$vName.apk")
         apkDir.listFiles()?.forEach { file ->
-            if (file.name.endsWith(".apk")) {
-                file.copyTo(File(apkDir, "NfcHider-$vCode-$vName.apk"), overwrite = true)
+            if (file.name.endsWith(".apk") && file != targetApk) {
+                file.copyTo(targetApk, overwrite = true)
+                file.delete()
             }
         }
     }

@@ -81,8 +81,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.tag }}
-          name: ${{ steps.get_version.outputs.version }}
-          files: artifacts/*.apk
+          name: ${{ steps.get_version.outputs.tag }}
+          files: artifacts/NfcHider-${{ steps.get_version.outputs.tag }}.apk
           generate_release_notes: true
           draft: false
           prerelease: false
