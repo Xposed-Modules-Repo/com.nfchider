@@ -1,7 +1,7 @@
 # NFC Hider
 https://t.me/+eIEZ13o6HPU5NzBk
   中国群921440494
-[![构建状态](https://github.com/Xposed-Modules-Repo/com.nfchider/actions/workflows/build.yml/badge.svg)](https://github.com/Xposed-Modules-Repo/com.nfchider/actions/workflows/build.yml)
+[![构建状态](https://github.com/furina707/com.nfchider/actions/workflows/build.yml/badge.svg)](https://github.com/furina707/com.nfchider/actions/workflows/build.yml)
 
 一款基于现代 Xposed / LSPosed 框架的 Android 模块，支持对目标应用隐藏设备 NFC 硬件，并提供高自由度的地图轨迹 GPS 位置模拟与回放。
 
@@ -17,7 +17,7 @@ https://t.me/+eIEZ13o6HPU5NzBk
 - **App 内实时开关**：在 NFC Hider 应用内关闭开关即可立即停止 Hook，开启开关即可重新生效，无需重启设备。
 
 ### 2. 多源地图与智能诊断（高德国内直连 / Google 卫星 / OSM）
-- **国内高德地图极速直连**：内置国内高德标准矢量地图与高德卫星影像图，免代理直连，秒级加载；
+- **国内高德地图极速直连**：内置国内高德标准矢量地图与高德高清卫星影像图，免代理直连，秒级加载；
 - **Google 卫星混合高精图层**：支持 Google Maps 卫星混合图层（高精卫星实景 + 道路/地标标注）以及标准 OSM 地图；
 - **地图网络与显示自诊断**：智能识别瓦片加载失败与异常，顶部即时提醒并支持一键切换国内高德或排查网络。
 
@@ -45,10 +45,16 @@ https://t.me/+eIEZ13o6HPU5NzBk
    - 打开 **NFC Hider** 主界面，即可看到「全局系统 Hook」总开关；
    - **在 App 内关闭开关**：即刻停止所有 Hook 拦截与位置模拟，各应用恢复真实系统状态；
    - **在 App 内开启开关**：即刻重新启用全局拦截与位置模拟；
-5. **卫星地图与地点收藏**：
-   - 点击「打开卫星地图轨迹模拟与地点收藏」进入地图；
-   - 默认展示 Google 高清卫星混合图，点击右侧「🛰️」按钮可切换图层；
-   - 点击右侧「⭐」按钮打开地点收藏夹，可快速定位已收藏地点或将其加入路线；在地图任意位置**长按**即可直接添加收藏点！
+5. **多源地图与图层切换**：
+   - 点击「打开位置模拟」进入地图；
+   - 默认支持高德矢量/卫星影像图（国内免代理直连）及 Google Maps 卫星混合图，点击右侧「🗺️/🛰️」按钮可秒级切换图层；
+   - 若遇到地图加载异常，顶部将自动弹出诊断警告并支持一键切换为国内高德地图；
+6. **定位二级菜单与地点搜索**：
+   - 点击右侧「🎯」定位按钮展开二级菜单，可分别选择「定位真实 GPS」或「移动到模拟位置/开启跟随」；
+   - 点击右侧「🔍」或在二级菜单/路线编辑栏中点击「搜点」，输入地名、商圈或经纬度，即可一键「设为模拟点」、「加入路线」或「查看/收藏」；
+7. **折叠控制面板与地点收藏**：
+   - 底部面板支持下滑/点击把手一键收起为极简条，不遮挡地图视野；
+   - 点击右侧「⭐」打开收藏夹，或在地图任意位置长按快速添加收藏点。
 
 ---
 
@@ -75,7 +81,7 @@ cd com.nfchider
 ```
 
 编译输出目录：
-- `app/build/outputs/apk/release/NfcHider-5-1.2.apk`
+- `app/build/outputs/apk/release/NfcHider-6-1.1.apk`
 
 ---
 
