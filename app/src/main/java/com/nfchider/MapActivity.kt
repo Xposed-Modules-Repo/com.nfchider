@@ -22,21 +22,31 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.OutlinedTextField
+import com.nfchider.location.BookmarkRepository
+import com.nfchider.location.GoogleHybridTileSource
+import com.nfchider.location.LocationBookmark
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -112,6 +122,12 @@ fun LocationSimScreen() {
     var follow by remember { mutableStateOf(false) }
     var simPos by remember { mutableStateOf<TrajectoryEngine.Position?>(null) }
     var channelBound by remember { mutableStateOf(ModuleService.bound) }
+    var isSatellite by remember { mutableStateOf(true) }
+    var bookmarks by remember { mutableStateOf(BookmarkRepository.load(context)) }
+    var showBookmarksDialog by remember { mutableStateOf(false) }
+    var showAddBookmarkDialog by remember { mutableStateOf(false) }
+    var targetBookmarkPoint by remember { mutableStateOf<GeoPoint?>(null) }
+    var bookmarkToEdit by remember { mutableStateOf<LocationBookmark?>(null) }
 
     // ------------------------------------------------------------------
     // 真实定位与轨迹录制服务
@@ -216,10 +232,10 @@ fun LocationSimScreen() {
 
     val mapView = remember {
         MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+            setTileSource(GoogleHybridTileSource)
             setMultiTouchControls(true)
             zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-            controller.setZoom(14.5)
+            controller.setZoom(15.5)
             controller.setCenter(
                 GeoPoint(
                     config.points.firstOrNull()?.lat ?: 39.9087,
@@ -232,7 +248,13 @@ fun LocationSimScreen() {
                     return false
                 }
 
-                override fun longPressHelper(p: GeoPoint?): Boolean = true
+                override fun longPressHelper(p: GeoPoint?): Boolean {
+                    if (p != null) {
+                        targetBookmarkPoint = p
+                        showAddBookmarkDialog = true
+                    }
+                    return true
+                }
             }))
             overlays.add(routeLine)
             overlays.add(recordRouteLine)
@@ -257,6 +279,11 @@ fun LocationSimScreen() {
             isEnabled = false
         }.also { mapView.overlays.add(it) }
     }
+
+    // 地点收藏标记列表与路线航点标记列表
+    val bookmarkMarkers = remember { mutableListOf<Marker>() }
+    val waypointMarkers = remember { mutableListOf<Marker>() }
+    val bookmarkDrawable = remember { createBookmarkDrawable(context) }
 
     tapHandler.value = { geo ->
         if (recordingState != RealLocationTracker.RecordingState.IDLE) {
@@ -298,17 +325,41 @@ fun LocationSimScreen() {
     // 模拟配置轨迹点列表变更时：重绘路线与航点标记
     LaunchedEffect(config.points.size) {
         val overlays = mapView.overlays
-        overlays.removeAll { it is Marker && it !== posMarker && it !== myLocationMarker }
+        waypointMarkers.forEach { overlays.remove(it) }
+        waypointMarkers.clear()
         val geoPoints = config.points.map { GeoPoint(it.lat, it.lng) }
         routeLine.setPoints(geoPoints)
         config.points.forEachIndexed { index, _ ->
-            overlays.add(
-                Marker(mapView).apply {
-                    position = geoPoints[index]
-                    title = "点 ${index + 1}"
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            val m = Marker(mapView).apply {
+                position = geoPoints[index]
+                title = "点 ${index + 1}"
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            }
+            waypointMarkers.add(m)
+            overlays.add(m)
+        }
+        mapView.invalidate()
+    }
+
+    // 收藏地点变更时：重绘收藏星标 Marker
+    LaunchedEffect(bookmarks) {
+        val overlays = mapView.overlays
+        bookmarkMarkers.forEach { overlays.remove(it) }
+        bookmarkMarkers.clear()
+        bookmarks.forEach { bm ->
+            val m = Marker(mapView).apply {
+                position = GeoPoint(bm.lat, bm.lng)
+                title = "⭐ " + bm.name
+                snippet = "坐标: ${String.format(Locale.US, "%.5f, %.5f", bm.lat, bm.lng)}"
+                icon = bookmarkDrawable
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                setOnMarkerClickListener { marker, _ ->
+                    marker.showInfoWindow()
+                    true
                 }
-            )
+            }
+            bookmarkMarkers.add(m)
+            overlays.add(m)
         }
         mapView.invalidate()
     }
@@ -400,7 +451,7 @@ fun LocationSimScreen() {
                     color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.85f)
                 ) {
                     Text(
-                        text = "点击右上角「定位」直接回到当前位置；\n开启「标记」点击地图添加点，或点击下方「录制轨迹」现场采集路线。",
+                        text = "点击右上角「定位」直接回到当前位置；\n开启「标记」点击地图添加点，长按地图或点击「⭐」收藏地点；下方可现场「录制轨迹」。",
                         modifier = Modifier.padding(14.dp),
                         color = MaterialTheme.colorScheme.inverseOnSurface,
                         fontSize = 13.sp,
@@ -410,7 +461,7 @@ fun LocationSimScreen() {
             }
 
             // --------------------------------------------------------------
-            // 右侧浮动快捷按钮组（缩放、定位到当前位置、跟随模拟位置）
+            // 右侧浮动快捷按钮组（缩放、定位到当前位置、跟随模拟位置、图层与收藏）
             // --------------------------------------------------------------
             Column(
                 modifier = Modifier
@@ -420,6 +471,26 @@ fun LocationSimScreen() {
             ) {
                 MapFab(icon = Icons.Filled.Add) { mapView.controller.zoomIn() }
                 MapFabText(label = "-") { mapView.controller.zoomOut() }
+
+                // 卫星 / 标准 图层切换
+                MapFabText(label = if (isSatellite) "🛰️" else "🗺️") {
+                    isSatellite = !isSatellite
+                    if (isSatellite) {
+                        mapView.setTileSource(GoogleHybridTileSource)
+                        Toast.makeText(context, "已切换为 Google 卫星混合图", Toast.LENGTH_SHORT).show()
+                    } else {
+                        mapView.setTileSource(TileSourceFactory.MAPNIK)
+                        Toast.makeText(context, "已切换为标准矢量地图", Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                // 地点收藏夹
+                MapFab(
+                    icon = Icons.Filled.Star,
+                    tint = androidx.compose.ui.graphics.Color(0xFFFFB300)
+                ) {
+                    showBookmarksDialog = true
+                }
 
                 // 定位到我的物理位置
                 MapFab(
@@ -926,6 +997,89 @@ fun LocationSimScreen() {
                     }
                 )
             }
+
+            // --------------------------------------------------------------
+            // 地点收藏夹对话框与操作
+            // --------------------------------------------------------------
+            if (showBookmarksDialog) {
+                BookmarksDialog(
+                    bookmarks = bookmarks,
+                    onDismiss = { showBookmarksDialog = false },
+                    onNavigateTo = { bm ->
+                        mapView.controller.animateTo(GeoPoint(bm.lat, bm.lng))
+                        if (mapView.zoomLevelDouble < 16.0) {
+                            mapView.controller.setZoom(16.5)
+                        }
+                        showBookmarksDialog = false
+                    },
+                    onAddToRoute = { bm ->
+                        update { it.points().add(TrajectoryConfig.Point(bm.lat, bm.lng, Double.NaN)) }
+                        Toast.makeText(context, "已将「${bm.name}」添加至模拟路线", Toast.LENGTH_SHORT).show()
+                    },
+                    onBookmarkCurrentCenter = {
+                        val center = mapView.mapCenter
+                        targetBookmarkPoint = GeoPoint(center.latitude, center.longitude)
+                        showAddBookmarkDialog = true
+                    },
+                    onBookmarkMyLocation = {
+                        val loc = realLocation
+                        if (loc != null) {
+                            targetBookmarkPoint = GeoPoint(loc.latitude, loc.longitude)
+                            showAddBookmarkDialog = true
+                        } else {
+                            Toast.makeText(context, "尚未获取到真实定位，请稍候", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onEdit = { bm ->
+                        bookmarkToEdit = bm
+                    },
+                    onDelete = { bm ->
+                        bookmarks = BookmarkRepository.remove(context, bm.id)
+                        Toast.makeText(context, "已删除「${bm.name}」", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
+
+            if (showAddBookmarkDialog && targetBookmarkPoint != null) {
+                val pt = targetBookmarkPoint!!
+                AddBookmarkDialog(
+                    geoPoint = pt,
+                    defaultName = "地点 ${bookmarks.size + 1}",
+                    onDismiss = {
+                        showAddBookmarkDialog = false
+                        targetBookmarkPoint = null
+                    },
+                    onSave = { name, addToRoute ->
+                        val newBm = LocationBookmark(
+                            name = name,
+                            lat = pt.latitude,
+                            lng = pt.longitude
+                        )
+                        bookmarks = BookmarkRepository.add(context, newBm)
+                        if (addToRoute) {
+                            update { it.points().add(TrajectoryConfig.Point(pt.latitude, pt.longitude, Double.NaN)) }
+                            Toast.makeText(context, "已收藏并加入模拟路线", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "已收藏「${newBm.name}」", Toast.LENGTH_SHORT).show()
+                        }
+                        showAddBookmarkDialog = false
+                        targetBookmarkPoint = null
+                    }
+                )
+            }
+
+            if (bookmarkToEdit != null) {
+                val bm = bookmarkToEdit!!
+                EditBookmarkDialog(
+                    bookmark = bm,
+                    onDismiss = { bookmarkToEdit = null },
+                    onConfirm = { newName ->
+                        bookmarks = BookmarkRepository.update(context, bm.copy(name = newName))
+                        bookmarkToEdit = null
+                        Toast.makeText(context, "地点名称已更新", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
         }
     }
 }
@@ -953,6 +1107,34 @@ private fun createMyLocationDrawable(context: Context): Drawable {
     // 内层核心深蓝圆点
     paint.color = Color.parseColor("#1976D2")
     canvas.drawCircle(center, center, radius * 0.45f, paint)
+
+    return BitmapDrawable(context.resources, bitmap)
+}
+
+/**
+ * 动态纯代码生成金黄色星标收藏地点 Drawable
+ */
+private fun createBookmarkDrawable(context: Context): Drawable {
+    val density = context.resources.displayMetrics.density
+    val size = (30 * density).toInt().coerceAtLeast(30)
+    val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val center = size / 2f
+    val radius = size / 2f * 0.82f
+
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    paint.color = Color.parseColor("#FFB300")
+    paint.style = android.graphics.Paint.Style.FILL
+    canvas.drawCircle(center, center, radius, paint)
+
+    paint.color = Color.WHITE
+    paint.style = android.graphics.Paint.Style.STROKE
+    paint.strokeWidth = 2.5f * density
+    canvas.drawCircle(center, center, radius, paint)
+
+    paint.style = android.graphics.Paint.Style.FILL
+    paint.color = Color.parseColor("#E65100")
+    canvas.drawCircle(center, center, radius * 0.42f, paint)
 
     return BitmapDrawable(context.resources, bitmap)
 }
@@ -1141,7 +1323,7 @@ fun DiagnosticDialog(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "1. 模块本身作为控制器，无需也不能在 LSPosed 中勾选。\n2. 请在 LSPosed 中勾选需要使用模拟位置的目标应用（如打卡软件、高德地图等）。\n3. 勾选后，在系统设置中对目标应用点击「强行停止」再重新打开，即可生效模拟定位！",
+                            text = "1. 模块已切换为全局系统 Hook 模式，在 LSPosed 作用域中勾选「系统框架 (android)」即可全局生效，无需勾选各个单独 App！\n2. 在 App 内关闭开关即可立即关闭 Hook，开启即可重新生效，无需重启！\n3. 本 App 自身未被 Hook，因此在 App 内始终可获取真实定位并录制真实轨迹。",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1185,4 +1367,235 @@ private fun DiagnosticItem(label: String, value: String, isOk: Boolean) {
             color = if (isOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
         )
     }
+}
+
+@Composable
+fun BookmarksDialog(
+    bookmarks: List<LocationBookmark>,
+    onDismiss: () -> Unit,
+    onNavigateTo: (LocationBookmark) -> Unit,
+    onAddToRoute: (LocationBookmark) -> Unit,
+    onBookmarkCurrentCenter: () -> Unit,
+    onBookmarkMyLocation: () -> Unit,
+    onEdit: (LocationBookmark) -> Unit,
+    onDelete: (LocationBookmark) -> Unit
+) {
+    val dateFmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.Star,
+                    contentDescription = null,
+                    tint = androidx.compose.ui.graphics.Color(0xFFFFB300),
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("地点收藏 (${bookmarks.size})")
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 450.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onBookmarkCurrentCenter,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
+                        Text("收藏地图中心", fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = onBookmarkMyLocation,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
+                        Text("收藏当前定位", fontSize = 12.sp)
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                if (bookmarks.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "暂无收藏地点。\n点击上方按钮，或在地图上长按任意位置即可快速收藏！",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 18.sp
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(bookmarks, key = { it.id }) { bm ->
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = bm.name,
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Row {
+                                            IconButton(
+                                                onClick = { onEdit(bm) },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Filled.Edit,
+                                                    contentDescription = "编辑",
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = { onDelete(bm) },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Filled.Delete,
+                                                    contentDescription = "删除",
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Text(
+                                        text = "${String.format(Locale.US, "%.5f, %.5f", bm.lat, bm.lng)} · ${dateFmt.format(Date(bm.createTime))}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        TextButton(
+                                            onClick = { onAddToRoute(bm) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("加入路线", fontSize = 12.sp)
+                                        }
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Button(
+                                            onClick = { onNavigateTo(bm) },
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("前往", fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
+}
+
+@Composable
+fun AddBookmarkDialog(
+    geoPoint: GeoPoint,
+    defaultName: String,
+    onDismiss: () -> Unit,
+    onSave: (String, Boolean) -> Unit
+) {
+    var name by remember { mutableStateOf(defaultName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加地点收藏") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "经纬度坐标：${String.format(Locale.US, "%.5f, %.5f", geoPoint.latitude, geoPoint.longitude)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("地点名称 / 备注") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSave(name.trim().ifEmpty { defaultName }, false) }) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedButton(onClick = { onSave(name.trim().ifEmpty { defaultName }, true) }) {
+                    Text("保存并设为路线点")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("取消")
+                }
+            }
+        }
+    )
+}
+
+@Composable
+fun EditBookmarkDialog(
+    bookmark: LocationBookmark,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember { mutableStateOf(bookmark.name) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("修改地点名称") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("地点名称") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(name.trim().ifEmpty { bookmark.name }) }) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
 }

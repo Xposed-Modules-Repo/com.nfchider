@@ -54,7 +54,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="对选中应用隐藏 NFC 硬件并支持地图轨迹 GPS 位置模拟。请在 LSPosed 中配置作用域。" />
+            android:value="全局系统 Hook 模式：在 LSPosed 中勾选「系统框架 (android)」即可全局生效。支持 App 内实时启闭 Hook、Google 卫星混合地图轨迹模拟与地点收藏。" />
         <meta-data
             android:name="xposedminversion"
             android:value="101" />

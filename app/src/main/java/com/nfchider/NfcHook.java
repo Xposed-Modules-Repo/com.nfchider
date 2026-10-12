@@ -10,16 +10,28 @@ import java.lang.reflect.Method;
 
 import io.github.libxposed.api.XposedModule;
 
+import com.nfchider.location.ConfigStore;
+
 public class NfcHook extends XposedModule {
 
     private static final String TAG = "NfcHider";
 
     @Override
     public void onPackageLoaded(@NonNull PackageLoadedParam param) {
+        if ("com.nfchider".equals(param.getPackageName())) return;
+        try {
+            ConfigStore.init(this);
+        } catch (Throwable ignored) {
+        }
+
         Log.i(TAG, "Hooking NFC for: " + param.getPackageName());
 
-        hookNfcAdapter();
-        hookPackageManager(param);
+        if ("android".equals(param.getPackageName())) {
+            hookSystemServerPackageManager(param);
+        } else {
+            hookNfcAdapter();
+            hookPackageManager(param);
+        }
     }
 
     private void hookNfcAdapter() {
@@ -28,6 +40,9 @@ public class NfcHook extends XposedModule {
                 if (method.getReturnType().equals(NfcAdapter.class)
                         && java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
                     hook(method).intercept(chain -> {
+                        if (!ConfigStore.isHookEnabled()) {
+                            return chain.proceed();
+                        }
                         Log.i(TAG, "Blocked: " + chain.getExecutable().getName());
                         return null;
                     });
@@ -45,6 +60,9 @@ public class NfcHook extends XposedModule {
             for (Method method : pmClass.getDeclaredMethods()) {
                 if (method.getName().equals("hasSystemFeature")) {
                     hook(method).intercept(chain -> {
+                        if (!ConfigStore.isHookEnabled()) {
+                            return chain.proceed();
+                        }
                         String feature = (String) chain.getArg(0);
                         if (feature != null && feature.toLowerCase().contains("nfc")) {
                             Log.i(TAG, "Blocked hasSystemFeature(" + feature + ")");
@@ -56,6 +74,38 @@ public class NfcHook extends XposedModule {
             }
         } catch (Throwable t) {
             Log.w(TAG, "hookPackageManager failed: " + t);
+        }
+    }
+
+    private void hookSystemServerPackageManager(PackageLoadedParam param) {
+        try {
+            ClassLoader cl = param.getDefaultClassLoader();
+            Class<?> pmsClass = null;
+            try {
+                pmsClass = cl.loadClass("com.android.server.pm.PackageManagerService");
+            } catch (Throwable ignored) {
+            }
+            if (pmsClass != null) {
+                for (Method method : pmsClass.getDeclaredMethods()) {
+                    if (method.getName().equals("hasSystemFeature")) {
+                        hook(method).intercept(chain -> {
+                            if (!ConfigStore.isHookEnabled()) {
+                                return chain.proceed();
+                            }
+                            Object arg0 = chain.getArg(0);
+                            if (arg0 instanceof String) {
+                                String feature = (String) arg0;
+                                if (feature.toLowerCase().contains("nfc")) {
+                                    return false;
+                                }
+                            }
+                            return chain.proceed();
+                        });
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "hookSystemServerPackageManager failed: " + t);
         }
     }
 }

@@ -3,6 +3,7 @@ package com.nfchider;
 import androidx.annotation.NonNull;
 
 import com.nfchider.location.LocationSim;
+import com.nfchider.location.SystemLocationHook;
 
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam;
@@ -22,6 +23,13 @@ public class LocationHook extends XposedModule {
 
     @Override
     public void onPackageLoaded(@NonNull PackageLoadedParam param) {
-        LocationSim.install(this, param);
+        if ("com.nfchider".equals(param.getPackageName())) {
+            return;
+        }
+        if ("android".equals(param.getPackageName())) {
+            SystemLocationHook.install(this, param);
+        } else {
+            LocationSim.install(this, param);
+        }
     }
 }

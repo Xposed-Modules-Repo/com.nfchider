@@ -19,7 +19,7 @@ import io.github.libxposed.api.XposedInterface;
  * When both fail the cache keeps its last value; a process that never saw a
  * config simply behaves as if the simulation were disabled.
  */
-final class ConfigStore {
+public final class ConfigStore {
 
     private static final String TAG = "NfcHider/Loc";
 
@@ -39,7 +39,7 @@ final class ConfigStore {
     private ConfigStore() {
     }
 
-    static void init(XposedInterface api) {
+    public static void init(XposedInterface api) {
         if (inited) return;
         inited = true;
         try {
@@ -63,7 +63,7 @@ final class ConfigStore {
     }
 
     /** Current config, or null when unavailable/disabled. Never throws. */
-    static TrajectoryConfig get() {
+    public static TrajectoryConfig get() {
         TrajectoryConfig c = cached;
         if (c != null && SystemClock.elapsedRealtime() - lastFetchElapsed < FRESH_MS) return c;
         synchronized (LOCK) {
@@ -73,8 +73,20 @@ final class ConfigStore {
         }
     }
 
+    /** True when the in-app global hook switch is enabled. */
+    public static boolean isHookEnabled() {
+        TrajectoryConfig c = get();
+        return c != null && c.enabled;
+    }
+
+    /** True when the simulation is enabled and has at least one waypoint. */
+    public static boolean isSimActive() {
+        TrajectoryConfig c = get();
+        return c != null && c.enabled && c.hasRoute();
+    }
+
     /** True when a config was ever successfully loaded. */
-    static boolean haveConfig() {
+    public static boolean haveConfig() {
         return cached != null;
     }
 

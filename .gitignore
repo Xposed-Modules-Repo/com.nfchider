@@ -11,3 +11,5 @@ local.properties
 *.jks
 !debug.keystore
 .tmp/
+*.jpg
+项目
