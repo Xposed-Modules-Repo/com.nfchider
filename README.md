@@ -5,7 +5,7 @@ https://t.me/+eIEZ13o6HPU5NzBk
 
 一款基于现代 Xposed / LSPosed 框架的 Android 模块，支持对目标应用隐藏设备 NFC 硬件，并提供高自由度的地图轨迹 GPS 位置模拟与回放。
 
-**当前版本：v1.3**
+**当前版本：6-1.1**
 
 ---
 
