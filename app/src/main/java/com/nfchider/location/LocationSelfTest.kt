@@ -30,10 +30,15 @@ object LocationSelfTest {
         val expectedPos: TrajectoryEngine.Position?,
         val status: TestStatus,
         val summaryText: String,
-        val detailText: String
+        val detailText: String,
+        val mapDiagnostic: MapDiagnostics.DiagnosticResult? = null
     )
 
-    fun runDiagnostics(context: Context, config: TrajectoryConfig): DiagnosticReport {
+    fun runDiagnostics(
+        context: Context,
+        config: TrajectoryConfig,
+        mapDiagnostic: MapDiagnostics.DiagnosticResult? = null
+    ): DiagnosticReport {
         val simEnabled = config.enabled
         val hasRoute = config.hasRoute()
         val channelBound = ModuleService.bound
@@ -97,7 +102,8 @@ object LocationSelfTest {
             expectedPos = expectedPos,
             status = status,
             summaryText = summary,
-            detailText = detail
+            detailText = detail,
+            mapDiagnostic = mapDiagnostic
         )
     }
 }

@@ -54,7 +54,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="全局系统 Hook 模式：在 LSPosed 中勾选「系统框架 (android)」即可全局生效。支持 App 内实时启闭 Hook、Google 卫星混合地图轨迹模拟与地点收藏。" />
+            android:value="全局系统 Hook 模式：在 LSPosed 中勾选「系统框架 (android)」即可全局生效。支持高德/Google/OSM地图切换、地点搜索、折叠控制面板与地点收藏。" />
         <meta-data
             android:name="xposedminversion"
             android:value="101" />

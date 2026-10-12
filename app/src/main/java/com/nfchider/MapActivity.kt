@@ -12,6 +12,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +31,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
@@ -39,18 +44,30 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.input.ImeAction
 import com.nfchider.location.BookmarkRepository
 import com.nfchider.location.GoogleHybridTileSource
+import com.nfchider.location.AmapSatelliteTileSource
+import com.nfchider.location.AmapVectorTileSource
 import com.nfchider.location.LocationBookmark
+import com.nfchider.location.LocationSearchService
+import com.nfchider.location.MapDiagnostics
+import com.nfchider.location.MapSourceItem
+import com.nfchider.location.SearchResultPlace
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -117,17 +134,32 @@ class MapActivity : ComponentActivity() {
 @Composable
 fun LocationSimScreen() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var config by remember { mutableStateOf(SimConfigRepository.load(context)) }
     var markMode by remember { mutableStateOf(true) }
     var follow by remember { mutableStateOf(false) }
     var simPos by remember { mutableStateOf<TrajectoryEngine.Position?>(null) }
     var channelBound by remember { mutableStateOf(ModuleService.bound) }
-    var isSatellite by remember { mutableStateOf(true) }
+
+    // 地图图层与诊断状态
+    val mapPrefs = remember { context.getSharedPreferences("map_prefs", Context.MODE_PRIVATE) }
+    var currentMapSource by remember {
+        val savedKey = mapPrefs.getString("selected_map_source", MapSourceItem.GOOGLE_HYBRID.key)
+            ?: MapSourceItem.GOOGLE_HYBRID.key
+        mutableStateOf(MapSourceItem.fromKey(savedKey))
+    }
+    var showMapSourceDialog by remember { mutableStateOf(false) }
+    var mapDiagnosticResult by remember { mutableStateOf<MapDiagnostics.DiagnosticResult?>(null) }
+    var isMapAlertDismissed by remember { mutableStateOf(false) }
+    var isPanelExpanded by remember { mutableStateOf(true) }
+
     var bookmarks by remember { mutableStateOf(BookmarkRepository.load(context)) }
     var showBookmarksDialog by remember { mutableStateOf(false) }
     var showAddBookmarkDialog by remember { mutableStateOf(false) }
     var targetBookmarkPoint by remember { mutableStateOf<GeoPoint?>(null) }
     var bookmarkToEdit by remember { mutableStateOf<LocationBookmark?>(null) }
+    var showLocationMenuDialog by remember { mutableStateOf(false) }
+    var showSearchLocationDialog by remember { mutableStateOf(false) }
 
     // ------------------------------------------------------------------
     // 真实定位与轨迹录制服务
@@ -146,7 +178,9 @@ fun LocationSimScreen() {
     var showCancelRecordingConfirm by remember { mutableStateOf(false) }
 
     var showDiagnosticDialog by remember { mutableStateOf(false) }
-    var diagnosticReport by remember { mutableStateOf(LocationSelfTest.runDiagnostics(context, config)) }
+    var diagnosticReport by remember {
+        mutableStateOf(LocationSelfTest.runDiagnostics(context, config, mapDiagnosticResult))
+    }
 
     val locationPermissions = arrayOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
@@ -159,16 +193,17 @@ fun LocationSimScreen() {
         if (tracker.hasLocationPermission()) {
             tracker.startLocationUpdates()
         }
-        diagnosticReport = LocationSelfTest.runDiagnostics(context, config)
+        diagnosticReport = LocationSelfTest.runDiagnostics(context, config, mapDiagnosticResult)
     }
 
-    // 首次进入界面：自动检查权限并启动真实定位监听
+    // 首次进入界面：自动检查权限并启动真实定位监听与地图连通性诊断
     LaunchedEffect(Unit) {
         if (!tracker.hasLocationPermission()) {
             permissionLauncher.launch(locationPermissions)
         } else {
             tracker.startLocationUpdates()
         }
+        mapDiagnosticResult = MapDiagnostics.diagnose(context, currentMapSource)
     }
 
     DisposableEffect(Unit) {
@@ -177,8 +212,12 @@ fun LocationSimScreen() {
         }
     }
 
-    LaunchedEffect(config.enabled, config.points.size, channelBound) {
-        diagnosticReport = LocationSelfTest.runDiagnostics(context, config)
+    LaunchedEffect(currentMapSource) {
+        mapDiagnosticResult = MapDiagnostics.diagnose(context, currentMapSource)
+    }
+
+    LaunchedEffect(config.enabled, config.points.size, channelBound, mapDiagnosticResult) {
+        diagnosticReport = LocationSelfTest.runDiagnostics(context, config, mapDiagnosticResult)
     }
 
     val update: ((TrajectoryConfig.Builder) -> Unit) -> Unit = { transform ->
@@ -186,7 +225,7 @@ fun LocationSimScreen() {
         transform(builder)
         config = builder.build()
         SimConfigRepository.save(context, config)
-        diagnosticReport = LocationSelfTest.runDiagnostics(context, config)
+        diagnosticReport = LocationSelfTest.runDiagnostics(context, config, mapDiagnosticResult)
     }
 
     // ------------------------------------------------------------------
@@ -232,7 +271,7 @@ fun LocationSimScreen() {
 
     val mapView = remember {
         MapView(context).apply {
-            setTileSource(GoogleHybridTileSource)
+            setTileSource(currentMapSource.getTileSource())
             setMultiTouchControls(true)
             zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
             controller.setZoom(15.5)
@@ -442,6 +481,103 @@ fun LocationSimScreen() {
         ) {
             AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 
+            // --------------------------------------------------------------
+            // 地图瓦片加载异常警告与一键修复浮条
+            // --------------------------------------------------------------
+            if (mapDiagnosticResult?.isDisplayAbnormal == true && !isMapAlertDismissed) {
+                Card(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(top = 12.dp, start = 12.dp, end = 76.dp)
+                        .fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.95f)
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = mapDiagnosticResult?.issueTitle ?: "地图加载异常",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                            IconButton(
+                                onClick = { isMapAlertDismissed = true },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Clear,
+                                    contentDescription = "关闭",
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = mapDiagnosticResult?.issueReason ?: "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            maxLines = 3
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (mapDiagnosticResult?.canSwitchToDomestic == true) {
+                                Button(
+                                    onClick = {
+                                        val newSource = MapSourceItem.AMAP_VECTOR
+                                        currentMapSource = newSource
+                                        mapPrefs.edit().putString("selected_map_source", newSource.key).apply()
+                                        mapView.setTileSource(newSource.getTileSource())
+                                        mapView.invalidate()
+                                        isMapAlertDismissed = true
+                                        Toast.makeText(context, "已切换为国内高德地图，瓦片极速加载中", Toast.LENGTH_SHORT).show()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(30.dp)
+                                ) {
+                                    Text("⚡ 一键切换高德", fontSize = 11.sp)
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = { showDiagnosticDialog = true },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                modifier = Modifier.height(30.dp)
+                            ) {
+                                Text("排查指南", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
             if (config.points.isEmpty() && recordingState == RealLocationTracker.RecordingState.IDLE) {
                 Surface(
                     modifier = Modifier
@@ -472,16 +608,11 @@ fun LocationSimScreen() {
                 MapFab(icon = Icons.Filled.Add) { mapView.controller.zoomIn() }
                 MapFabText(label = "-") { mapView.controller.zoomOut() }
 
-                // 卫星 / 标准 图层切换
-                MapFabText(label = if (isSatellite) "🛰️" else "🗺️") {
-                    isSatellite = !isSatellite
-                    if (isSatellite) {
-                        mapView.setTileSource(GoogleHybridTileSource)
-                        Toast.makeText(context, "已切换为 Google 卫星混合图", Toast.LENGTH_SHORT).show()
-                    } else {
-                        mapView.setTileSource(TileSourceFactory.MAPNIK)
-                        Toast.makeText(context, "已切换为标准矢量地图", Toast.LENGTH_SHORT).show()
-                    }
+                // 地图图层切换 (高德/Google/OSM)
+                MapFabText(
+                    label = if (currentMapSource == MapSourceItem.AMAP_SATELLITE || currentMapSource == MapSourceItem.GOOGLE_HYBRID) "🛰️" else "🗺️"
+                ) {
+                    showMapSourceDialog = true
                 }
 
                 // 地点收藏夹
@@ -492,43 +623,20 @@ fun LocationSimScreen() {
                     showBookmarksDialog = true
                 }
 
-                // 定位到我的物理位置
+                // 快捷地点搜索 (寻找/设置模拟位置)
                 MapFab(
-                    icon = Icons.Filled.LocationOn,
-                    tint = if (realLocation != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    icon = Icons.Filled.Search,
+                    tint = MaterialTheme.colorScheme.primary
                 ) {
-                    if (!tracker.hasLocationPermission()) {
-                        permissionLauncher.launch(locationPermissions)
-                    } else if (!tracker.isLocationProviderEnabled()) {
-                        Toast.makeText(context, "请在手机系统设置中开启定位服务 (GPS)", Toast.LENGTH_LONG).show()
-                    } else {
-                        val loc = realLocation
-                        if (loc != null) {
-                            mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
-                            if (mapView.zoomLevelDouble < 15.0) {
-                                mapView.controller.setZoom(16.0)
-                            }
-                            Toast.makeText(context, "已定位到当前真实位置", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "正在获取真实定位，请稍候...", Toast.LENGTH_SHORT).show()
-                            tracker.startLocationUpdates()
-                        }
-                    }
+                    showSearchLocationDialog = true
                 }
 
-                // 跟随模拟位置
+                // 定位与模拟位置二级菜单 (合并原先容易混淆的双Pin定位按钮)
                 MapFab(
-                    icon = Icons.Filled.Place,
+                    icon = Icons.Filled.LocationOn,
                     tint = if (follow) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                 ) {
-                    follow = !follow
-                    if (follow) {
-                        val p = simPos
-                        val first = config.points.firstOrNull()
-                        mapView.controller.animateTo(
-                            GeoPoint(p?.lat ?: first?.lat ?: 39.9087, p?.lng ?: first?.lng ?: 116.3975)
-                        )
-                    }
+                    showLocationMenuDialog = true
                 }
             }
 
@@ -539,44 +647,178 @@ fun LocationSimScreen() {
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth(),
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
                 shadowElevation = 8.dp
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .animateContentSize()
                 ) {
-                    if (recordingState != RealLocationTracker.RecordingState.IDLE) {
-                        // ======================================================
-                        // 轨迹录制中操作面板
-                        // ======================================================
+                    // 顶部拖动/切换把手
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { isPanelExpanded = !isPanelExpanded }
+                            .padding(top = 8.dp, bottom = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            modifier = Modifier
+                                .width(36.dp)
+                                .height(4.dp),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                        ) {}
+                    }
+
+                    if (!isPanelExpanded) {
+                        // ==================================================
+                        // 极简折叠状态（大幅腾出地图可视范围，避免挡住路线与标记）
+                        // ==================================================
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 16.dp, end = 12.dp, top = 2.dp, bottom = 10.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { isPanelExpanded = true }
+                            ) {
                                 Surface(
-                                    modifier = Modifier.size(10.dp),
+                                    modifier = Modifier.size(9.dp),
                                     shape = CircleShape,
-                                    color = if (recordingState == RealLocationTracker.RecordingState.RECORDING) androidx.compose.ui.graphics.Color(0xFFE53935) else androidx.compose.ui.graphics.Color(0xFF9E9E9E)
+                                    color = when {
+                                        recordingState != RealLocationTracker.RecordingState.IDLE ->
+                                            if (recordingState == RealLocationTracker.RecordingState.RECORDING)
+                                                androidx.compose.ui.graphics.Color(0xFFE53935)
+                                            else androidx.compose.ui.graphics.Color(0xFF9E9E9E)
+                                        config.enabled -> MaterialTheme.colorScheme.primary
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                    }
                                 ) {}
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (recordingState == RealLocationTracker.RecordingState.RECORDING) "正在录制真实轨迹..." else "录制已暂停",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (recordingState == RealLocationTracker.RecordingState.RECORDING) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = when {
+                                            recordingState != RealLocationTracker.RecordingState.IDLE ->
+                                                "轨迹录制中 (${recordedPoints.size} 点 · ${(currentSpeedMps * 3.6).roundToInt()} km/h)"
+                                            config.enabled ->
+                                                "模拟运行中 · ${(config.speedMps * 3.6).roundToInt()} km/h"
+                                            else ->
+                                                "模拟已停止 (${config.points.size} 点)"
+                                        },
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (config.enabled || recordingState != RealLocationTracker.RecordingState.IDLE)
+                                            MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    val subText = if (config.enabled && simPos != null) {
+                                        "广播: ${String.format(Locale.US, "%.5f, %.5f", simPos!!.lat, simPos!!.lng)}"
+                                    } else if (config.points.isNotEmpty()) {
+                                        "${config.points.size} 点 · ${formatDistance(totalM)} · 约 ${etaMin} 分钟"
+                                    } else {
+                                        "点击展开面板添加点或导入轨迹"
+                                    }
+                                    Text(
+                                        text = subText,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                }
                             }
-                            Text(
-                                text = "用时 ${recordingDurationSec / 60}分${recordingDurationSec % 60}秒",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (recordingState == RealLocationTracker.RecordingState.IDLE) {
+                                    if (config.enabled) {
+                                        Button(
+                                            onClick = { update { it.enabled(false) } },
+                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                            modifier = Modifier.height(30.dp)
+                                        ) {
+                                            Text("停止", fontSize = 12.sp)
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = { update { it.enabled(true).startAt(System.currentTimeMillis()) } },
+                                            enabled = config.points.isNotEmpty(),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                            modifier = Modifier.height(30.dp)
+                                        ) {
+                                            Text("开始", fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                                OutlinedButton(
+                                    onClick = { isPanelExpanded = true },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(30.dp)
+                                ) {
+                                    Text("展开 ▲", fontSize = 11.sp)
+                                }
+                            }
                         }
+                    } else {
+                        // ==================================================
+                        // 展开完整操作面板
+                        // ==================================================
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (recordingState != RealLocationTracker.RecordingState.IDLE) {
+                                // ======================================================
+                                // 轨迹录制中操作面板
+                                // ======================================================
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Surface(
+                                            modifier = Modifier.size(10.dp),
+                                            shape = CircleShape,
+                                            color = if (recordingState == RealLocationTracker.RecordingState.RECORDING) androidx.compose.ui.graphics.Color(0xFFE53935) else androidx.compose.ui.graphics.Color(0xFF9E9E9E)
+                                        ) {}
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (recordingState == RealLocationTracker.RecordingState.RECORDING) "正在录制真实轨迹..." else "录制已暂停",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (recordingState == RealLocationTracker.RecordingState.RECORDING) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "用时 ${recordingDurationSec / 60}分${recordingDurationSec % 60}秒",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        TextButton(
+                                            onClick = { isPanelExpanded = false },
+                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp),
+                                            modifier = Modifier.height(26.dp)
+                                        ) {
+                                            Text("收起 ▼", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
 
                         // 录制实时数据仪表
                         Surface(
@@ -672,11 +914,21 @@ fun LocationSimScreen() {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Text(
-                                text = if (channelBound) "配置通道：远程偏好" else "配置通道：文件兜底",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = if (channelBound) "配置通道：远程偏好" else "配置通道：文件兜底",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                TextButton(
+                                    onClick = { isPanelExpanded = false },
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp),
+                                    modifier = Modifier.height(26.dp)
+                                ) {
+                                    Text("收起 ▼", fontSize = 11.sp)
+                                }
+                            }
                         }
 
                         // 模拟运行状态与广播实时查看条
@@ -826,6 +1078,16 @@ fun LocationSimScreen() {
                                     )
                                 }
                             )
+                            AssistChip(
+                                onClick = { showSearchLocationDialog = true },
+                                label = { Text("搜点") },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Filled.Search, contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            )
 
                             // 录制真实轨迹按钮
                             Button(
@@ -894,6 +1156,8 @@ fun LocationSimScreen() {
                     }
                 }
             }
+        }
+    }
 
             // --------------------------------------------------------------
             // 录制完成操作对话框
@@ -983,7 +1247,7 @@ fun LocationSimScreen() {
                 )
             }
 
-            // 运行状态与 LSPosed 诊断对话框
+            // 运行状态与 LSPosed / 地图诊断对话框
             if (showDiagnosticDialog) {
                 DiagnosticDialog(
                     report = diagnosticReport,
@@ -992,8 +1256,37 @@ fun LocationSimScreen() {
                         if (!diagnosticReport.hasPermission) {
                             permissionLauncher.launch(locationPermissions)
                         } else {
-                            diagnosticReport = LocationSelfTest.runDiagnostics(context, config)
+                            scope.launch {
+                                mapDiagnosticResult = MapDiagnostics.diagnose(context, currentMapSource)
+                                diagnosticReport = LocationSelfTest.runDiagnostics(context, config, mapDiagnosticResult)
+                            }
                         }
+                    },
+                    onSwitchToAmap = {
+                        val newSource = MapSourceItem.AMAP_VECTOR
+                        currentMapSource = newSource
+                        mapPrefs.edit().putString("selected_map_source", newSource.key).apply()
+                        mapView.setTileSource(newSource.getTileSource())
+                        mapView.invalidate()
+                        isMapAlertDismissed = true
+                        showDiagnosticDialog = false
+                        Toast.makeText(context, "已切换为国内高德地图", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
+
+            // 地图图层切换对话框
+            if (showMapSourceDialog) {
+                MapSourceDialog(
+                    currentSource = currentMapSource,
+                    onDismiss = { showMapSourceDialog = false },
+                    onSelectSource = { newSource ->
+                        currentMapSource = newSource
+                        mapPrefs.edit().putString("selected_map_source", newSource.key).apply()
+                        mapView.setTileSource(newSource.getTileSource())
+                        mapView.invalidate()
+                        isMapAlertDismissed = false
+                        Toast.makeText(context, "已切换为「${newSource.title}」", Toast.LENGTH_SHORT).show()
                     }
                 )
             }
@@ -1077,6 +1370,135 @@ fun LocationSimScreen() {
                         bookmarks = BookmarkRepository.update(context, bm.copy(name = newName))
                         bookmarkToEdit = null
                         Toast.makeText(context, "地点名称已更新", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
+
+            // --------------------------------------------------------------
+            // 二级菜单：选择真实位置与模拟位置
+            // --------------------------------------------------------------
+            if (showLocationMenuDialog) {
+                LocationTargetMenuDialog(
+                    realLocation = realLocation,
+                    simPos = simPos,
+                    config = config,
+                    isFollowing = follow,
+                    hasLocationPermission = tracker.hasLocationPermission(),
+                    isProviderEnabled = tracker.isLocationProviderEnabled(),
+                    onDismiss = { showLocationMenuDialog = false },
+                    onLocateReal = {
+                        if (!tracker.hasLocationPermission()) {
+                            permissionLauncher.launch(locationPermissions)
+                        } else if (!tracker.isLocationProviderEnabled()) {
+                            Toast.makeText(context, "请在手机系统设置中开启定位服务 (GPS)", Toast.LENGTH_LONG).show()
+                        } else {
+                            val loc = realLocation
+                            if (loc != null) {
+                                mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
+                                if (mapView.zoomLevelDouble < 15.0) {
+                                    mapView.controller.setZoom(16.0)
+                                }
+                                Toast.makeText(context, "已定位到当前真实物理位置", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "正在获取真实定位，请稍候...", Toast.LENGTH_SHORT).show()
+                                tracker.startLocationUpdates()
+                            }
+                        }
+                    },
+                    onUseRealAsSim = {
+                        val loc = realLocation
+                        if (loc != null) {
+                            update { b ->
+                                b.points().clear()
+                                b.points().add(TrajectoryConfig.Point(loc.latitude, loc.longitude, Double.NaN))
+                                b.enabled(true)
+                                b.startAt(System.currentTimeMillis())
+                            }
+                            mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
+                            Toast.makeText(context, "已将真实物理位置设为模拟位置", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "尚未获取到真实定位，无法设为模拟点", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onMoveToSim = {
+                        val p = simPos
+                        val first = config.points.firstOrNull()
+                        val targetLat = p?.lat ?: first?.lat
+                        val targetLng = p?.lng ?: first?.lng
+                        if (targetLat != null && targetLng != null) {
+                            mapView.controller.animateTo(GeoPoint(targetLat, targetLng))
+                            if (mapView.zoomLevelDouble < 15.0) {
+                                mapView.controller.setZoom(16.0)
+                            }
+                            Toast.makeText(context, "已移动到模拟位置", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "尚未设置模拟位置，请搜索地点或在地图上标记", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onToggleFollow = {
+                        follow = !follow
+                        if (follow) {
+                            val p = simPos
+                            val first = config.points.firstOrNull()
+                            val targetLat = p?.lat ?: first?.lat
+                            val targetLng = p?.lng ?: first?.lng
+                            if (targetLat != null && targetLng != null) {
+                                mapView.controller.animateTo(GeoPoint(targetLat, targetLng))
+                            }
+                            Toast.makeText(context, "已开启模拟移动跟随", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "已关闭模拟移动跟随", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onOpenSearch = {
+                        showSearchLocationDialog = true
+                    }
+                )
+            }
+
+            // --------------------------------------------------------------
+            // 地点搜索对话框 (搜索寻找模拟位置)
+            // --------------------------------------------------------------
+            if (showSearchLocationDialog) {
+                SearchLocationDialog(
+                    onDismiss = { showSearchLocationDialog = false },
+                    onSetAsSimulation = { lat, lng, name ->
+                        update { b ->
+                            b.points().clear()
+                            b.points().add(TrajectoryConfig.Point(lat, lng, Double.NaN))
+                            b.enabled(true)
+                            b.startAt(System.currentTimeMillis())
+                        }
+                        mapView.controller.animateTo(GeoPoint(lat, lng))
+                        if (mapView.zoomLevelDouble < 16.0) {
+                            mapView.controller.setZoom(16.5)
+                        }
+                        showSearchLocationDialog = false
+                        Toast.makeText(context, "已将模拟位置设为「$name」", Toast.LENGTH_SHORT).show()
+                    },
+                    onAddToRoute = { lat, lng, name ->
+                        update { b ->
+                            b.points().add(TrajectoryConfig.Point(lat, lng, Double.NaN))
+                        }
+                        mapView.controller.animateTo(GeoPoint(lat, lng))
+                        showSearchLocationDialog = false
+                        Toast.makeText(context, "已将「$name」加入路线 (共 ${config.points.size + 1} 点)", Toast.LENGTH_SHORT).show()
+                    },
+                    onViewOnMap = { lat, lng ->
+                        mapView.controller.animateTo(GeoPoint(lat, lng))
+                        if (mapView.zoomLevelDouble < 16.0) {
+                            mapView.controller.setZoom(16.5)
+                        }
+                        showSearchLocationDialog = false
+                    },
+                    onBookmark = { lat, lng, name ->
+                        val newBm = LocationBookmark(
+                            name = name,
+                            lat = lat,
+                            lng = lng
+                        )
+                        bookmarks = BookmarkRepository.add(context, newBm)
+                        Toast.makeText(context, "已收藏「$name」", Toast.LENGTH_SHORT).show()
                     }
                 )
             }
@@ -1232,7 +1654,8 @@ private fun parseGpx(input: InputStream?): List<TrajectoryConfig.Point> {
 fun DiagnosticDialog(
     report: LocationSelfTest.DiagnosticReport,
     onDismiss: () -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onSwitchToAmap: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1253,101 +1676,305 @@ fun DiagnosticDialog(
                     modifier = Modifier.size(24.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("模拟运行状态与说明")
+                Text("模拟与地图运行诊断")
             }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = when (report.status) {
-                            LocationSelfTest.TestStatus.BROADCASTING -> MaterialTheme.colorScheme.primaryContainer
-                            LocationSelfTest.TestStatus.ROUTE_NOT_READY -> MaterialTheme.colorScheme.secondaryContainer
-                            LocationSelfTest.TestStatus.SIM_DISABLED -> MaterialTheme.colorScheme.surfaceVariant
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = when (report.status) {
+                                    LocationSelfTest.TestStatus.BROADCASTING -> MaterialTheme.colorScheme.primaryContainer
+                                    LocationSelfTest.TestStatus.ROUTE_NOT_READY -> MaterialTheme.colorScheme.secondaryContainer
+                                    LocationSelfTest.TestStatus.SIM_DISABLED -> MaterialTheme.colorScheme.surfaceVariant
+                                }
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = report.summaryText,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = report.detailText,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                         }
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            text = report.summaryText,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = report.detailText,
-                            style = MaterialTheme.typography.bodySmall
+                    }
+
+                    // 地图显示与网络连通性深度诊断
+                    val mapDiag = report.mapDiagnostic
+                    if (mapDiag != null) {
+                        item {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (mapDiag.isDisplayAbnormal)
+                                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                                    else
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = if (mapDiag.isDisplayAbnormal) Icons.Filled.Warning else Icons.Filled.CheckCircle,
+                                            contentDescription = null,
+                                            tint = if (mapDiag.isDisplayAbnormal) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "🗺️ 地图显示与网络连通分析",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    DiagnosticItem(
+                                        label = "当前地图图层",
+                                        value = mapDiag.currentSource.title,
+                                        isOk = !mapDiag.isDisplayAbnormal
+                                    )
+                                    DiagnosticItem(
+                                        label = "网络连接状态",
+                                        value = mapDiag.networkStatus.desc,
+                                        isOk = mapDiag.networkStatus.isConnected
+                                    )
+                                    DiagnosticItem(
+                                        label = "瓦片服务器连接",
+                                        value = if (mapDiag.currentProbe.reachable) "正常 (${mapDiag.currentProbe.latencyMs}ms)" else "失败/超时",
+                                        isOk = mapDiag.currentProbe.reachable
+                                    )
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = "原因分析：${mapDiag.issueReason}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        lineHeight = 15.sp
+                                    )
+
+                                    if (mapDiag.suggestions.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = "排查指引：",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        mapDiag.suggestions.forEach { sug ->
+                                            Text(
+                                                text = sug,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontSize = 11.sp,
+                                                lineHeight = 15.sp,
+                                                modifier = Modifier.padding(top = 2.dp)
+                                            )
+                                        }
+                                    }
+
+                                    if (mapDiag.canSwitchToDomestic) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Button(
+                                            onClick = onSwitchToAmap,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary
+                                            ),
+                                            contentPadding = PaddingValues(vertical = 4.dp)
+                                        ) {
+                                            Text("⚡ 一键切换免代理的高德地图", fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Text("定位与模拟指标：", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    }
+
+                    item {
+                        DiagnosticItem(
+                            label = "模拟运行开关",
+                            value = if (report.isSimEnabled) "已开启" else "未开启",
+                            isOk = report.isSimEnabled
                         )
                     }
-                }
-
-                Text("核心指标：", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-
-                DiagnosticItem(
-                    label = "模拟运行开关",
-                    value = if (report.isSimEnabled) "已开启" else "未开启",
-                    isOk = report.isSimEnabled
-                )
-                DiagnosticItem(
-                    label = "轨迹就绪状态",
-                    value = if (report.hasRoute) "已就绪" else "点数不足",
-                    isOk = report.hasRoute
-                )
-                DiagnosticItem(
-                    label = "配置同步通道",
-                    value = if (report.isChannelBound) "LSPosed 远程通道" else "本地持久化就绪",
-                    isOk = true
-                )
-
-                if (report.expectedPos != null) {
-                    DiagnosticItem(
-                        label = "当前广播坐标",
-                        value = "${String.format(Locale.US, "%.5f, %.5f", report.expectedPos.lat, report.expectedPos.lng)}",
-                        isOk = true
-                    )
-                }
-
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(10.dp)) {
-                        Text(
-                            text = "💡 LSPosed 作用域说明",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "1. 模块已切换为全局系统 Hook 模式，在 LSPosed 作用域中勾选「系统框架 (android)」即可全局生效，无需勾选各个单独 App！\n2. 在 App 内关闭开关即可立即关闭 Hook，开启即可重新生效，无需重启！\n3. 本 App 自身未被 Hook，因此在 App 内始终可获取真实定位并录制真实轨迹。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    item {
+                        DiagnosticItem(
+                            label = "轨迹就绪状态",
+                            value = if (report.hasRoute) "已就绪" else "点数不足",
+                            isOk = report.hasRoute
                         )
                     }
-                }
+                    item {
+                        DiagnosticItem(
+                            label = "配置同步通道",
+                            value = if (report.isChannelBound) "LSPosed 远程通道" else "本地持久化就绪",
+                            isOk = true
+                        )
+                    }
 
-                if (report.actualLocation != null) {
-                    Text(
-                        text = "手机当前真实 GPS: ${String.format(Locale.US, "%.5f, %.5f", report.actualLocation.latitude, report.actualLocation.longitude)} (本模块未勾选自身，故返回真实 GPS；目标应用已被 Hook 替换为模拟坐标)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
+                    if (report.expectedPos != null) {
+                        item {
+                            DiagnosticItem(
+                                label = "当前广播坐标",
+                                value = "${String.format(Locale.US, "%.5f, %.5f", report.expectedPos.lat, report.expectedPos.lng)}",
+                                isOk = true
+                            )
+                        }
+                    }
+
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = "💡 LSPosed 作用域说明",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "1. 模块已切换为全局系统 Hook 模式，在 LSPosed 作用域中勾选「系统框架 (android)」即可全局生效，无需勾选各个单独 App！\n2. 在 App 内关闭开关即可立即关闭 Hook，开启即可重新生效，无需重启！\n3. 本 App 自身未被 Hook，因此在 App 内始终可获取真实定位并录制真实轨迹。",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    if (report.actualLocation != null) {
+                        item {
+                            Text(
+                                text = "手机当前真实 GPS: ${String.format(Locale.US, "%.5f, %.5f", report.actualLocation.latitude, report.actualLocation.longitude)} (本模块未勾选自身，故返回真实 GPS；目标应用已被 Hook 替换为模拟坐标)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
                 }
             }
         },
         confirmButton = {
             Button(onClick = onRefresh) {
-                Text(if (!report.hasPermission) "读取真实 GPS 对比" else "刷新状态")
+                Text(if (!report.hasPermission) "读取真实 GPS 对比" else "重新探测与刷新")
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("关闭")
             }
+        }
+    )
+}
+
+@Composable
+fun MapSourceDialog(
+    currentSource: MapSourceItem,
+    onDismiss: () -> Unit,
+    onSelectSource: (MapSourceItem) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择地图图层") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                MapSourceItem.entries.forEach { item ->
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (currentSource == item)
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                            else
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onSelectSource(item)
+                                onDismiss()
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = item.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        color = if (item.isDomestic)
+                                            androidx.compose.ui.graphics.Color(0xFF2E7D32).copy(alpha = 0.2f)
+                                        else
+                                            androidx.compose.ui.graphics.Color(0xFFE65100).copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text(
+                                            text = if (item.isDomestic) "国内直连" else "需代理",
+                                            color = if (item.isDomestic)
+                                                androidx.compose.ui.graphics.Color(0xFF2E7D32)
+                                            else
+                                                androidx.compose.ui.graphics.Color(0xFFE65100),
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = item.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            if (currentSource == item) {
+                                Icon(
+                                    Icons.Filled.CheckCircle,
+                                    contentDescription = "已选",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
         }
     )
 }
@@ -1595,6 +2222,502 @@ fun EditBookmarkDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("取消")
+            }
+        }
+    )
+}
+
+/**
+ * 二级菜单：选择真实物理位置与模拟位置
+ */
+@Composable
+fun LocationTargetMenuDialog(
+    realLocation: android.location.Location?,
+    simPos: TrajectoryEngine.Position?,
+    config: TrajectoryConfig,
+    isFollowing: Boolean,
+    hasLocationPermission: Boolean,
+    isProviderEnabled: Boolean,
+    onDismiss: () -> Unit,
+    onLocateReal: () -> Unit,
+    onUseRealAsSim: () -> Unit,
+    onMoveToSim: () -> Unit,
+    onToggleFollow: () -> Unit,
+    onOpenSearch: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.LocationOn,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("定位与目标位置选择", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // ==============================================================
+                // 1. 真实物理位置 (GPS 硬件定位)
+                // ==============================================================
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("🎯", fontSize = 18.sp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "我的真实位置",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = if (realLocation != null) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.outlineVariant
+                            ) {
+                                Text(
+                                    text = if (realLocation != null) "GPS 已锁定" else "等待定位",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    color = if (realLocation != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        val realStatusText = when {
+                            !hasLocationPermission -> "尚未获取手机定位权限，点击下方按钮申请"
+                            !isProviderEnabled -> "手机系统定位服务 (GPS) 未开启"
+                            realLocation != null -> String.format(
+                                Locale.US,
+                                "真实坐标: %.5f, %.5f · 精度约 %.0f 米",
+                                realLocation.latitude, realLocation.longitude, realLocation.accuracy
+                            )
+                            else -> "正在搜索 GPS 卫星信号，请稍候..."
+                        }
+                        Text(
+                            text = realStatusText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    onLocateReal()
+                                    onDismiss()
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("定位真实位置", fontSize = 13.sp)
+                            }
+
+                            if (realLocation != null) {
+                                OutlinedButton(
+                                    onClick = {
+                                        onUseRealAsSim()
+                                        onDismiss()
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text("设为模拟点", fontSize = 13.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ==============================================================
+                // 2. 模拟虚拟位置 (LSPosed 广播)
+                // ==============================================================
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("📍", fontSize = 18.sp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "模拟虚拟位置",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = if (config.enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Text(
+                                    text = if (config.enabled) "模拟运行中" else "未启动",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    color = if (config.enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        val simStatusText = when {
+                            config.enabled && simPos != null -> String.format(
+                                Locale.US,
+                                "广播坐标: %.5f, %.5f · 速度约 %.1f km/h",
+                                simPos.lat, simPos.lng, config.speedMps * 3.6
+                            )
+                            config.points.isNotEmpty() -> String.format(
+                                Locale.US,
+                                "已设 %d 个点 · 目标: %.5f, %.5f",
+                                config.points.size, config.points[0].lat, config.points[0].lng
+                            )
+                            else -> "尚未设置任何模拟坐标点"
+                        }
+                        Text(
+                            text = simStatusText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    onMoveToSim()
+                                    onDismiss()
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text("移动到模拟点", fontSize = 13.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    onToggleFollow()
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(if (isFollowing) "停止跟随" else "开启跟随", fontSize = 13.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // 搜索寻找地点入口按钮
+                        FilledTonalButton(
+                            onClick = {
+                                onDismiss()
+                                onOpenSearch()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("🔍 搜索地点寻找模拟位置", fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
+}
+
+/**
+ * 地点搜索对话框：搜索地名、地址或输入经纬度，一键设为模拟点或路线
+ */
+@Composable
+fun SearchLocationDialog(
+    onDismiss: () -> Unit,
+    onSetAsSimulation: (lat: Double, lng: Double, name: String) -> Unit,
+    onAddToRoute: (lat: Double, lng: Double, name: String) -> Unit,
+    onViewOnMap: (lat: Double, lng: Double) -> Unit,
+    onBookmark: (lat: Double, lng: Double, name: String) -> Unit
+) {
+    var queryText by remember { mutableStateOf("") }
+    var isSearching by remember { mutableStateOf(false) }
+    var searchResults by remember { mutableStateOf<List<SearchResultPlace>>(emptyList()) }
+    var hasSearched by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    val doSearch: () -> Unit = {
+        val q = queryText.trim()
+        if (q.isNotEmpty()) {
+            isSearching = true
+            errorMessage = null
+            hasSearched = true
+            scope.launch {
+                runCatching {
+                    LocationSearchService.search(q)
+                }.onSuccess { list ->
+                    searchResults = list
+                    isSearching = false
+                }.onFailure { err ->
+                    errorMessage = err.localizedMessage ?: "搜索失败，请检查网络"
+                    isSearching = false
+                }
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.Search,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("地点搜索 (模拟位置)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedTextField(
+                        value = queryText,
+                        onValueChange = { queryText = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("地名、路名或经纬度坐标...", fontSize = 13.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { doSearch() }),
+                        trailingIcon = {
+                            if (queryText.isNotEmpty()) {
+                                IconButton(onClick = { queryText = ""; searchResults = emptyList(); hasSearched = false }) {
+                                    Icon(Icons.Filled.Clear, contentDescription = "清空", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    )
+                    Button(
+                        onClick = doSearch,
+                        enabled = !isSearching && queryText.isNotBlank(),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 2.dp),
+                        modifier = Modifier.height(48.dp)
+                    ) {
+                        Text("搜索", fontSize = 13.sp)
+                    }
+                }
+
+                if (isSearching) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text(
+                        "正在全网检索地点，请稍候...",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                if (errorMessage != null) {
+                    Text(
+                        "搜索出错: $errorMessage",
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 12.sp
+                    )
+                }
+
+                if (!isSearching && hasSearched && searchResults.isEmpty() && errorMessage == null) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text("未找到相关地点", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "提示：可以尝试搜索更大的行政区、标志性建筑名，或直接输入经纬度坐标（如「39.9087, 116.3975」）。",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                }
+
+                if (!hasSearched && searchResults.isEmpty()) {
+                    Text(
+                        "💡 支持搜索全球地名、景点、车站、公司，或输入格式如「纬度, 经度」的坐标数值定位。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 16.sp
+                    )
+                }
+
+                if (searchResults.isNotEmpty()) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f, fill = false),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(searchResults) { item ->
+                            Card(
+                                shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = item.title,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1
+                                        )
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = MaterialTheme.colorScheme.primaryContainer
+                                        ) {
+                                            Text(
+                                                text = item.source,
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+
+                                    if (item.description.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = item.description,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            lineHeight = 15.sp
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = String.format(Locale.US, "坐标: %.5f, %.5f", item.lat, item.lng),
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Button(
+                                            onClick = { onSetAsSimulation(item.lat, item.lng, item.title) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                            modifier = Modifier.height(30.dp)
+                                        ) {
+                                            Text("设为模拟点", fontSize = 11.sp)
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = { onAddToRoute(item.lat, item.lng, item.title) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                            modifier = Modifier.height(30.dp)
+                                        ) {
+                                            Text("+ 路线", fontSize = 11.sp)
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = { onViewOnMap(item.lat, item.lng) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                            modifier = Modifier.height(30.dp)
+                                        ) {
+                                            Text("查看", fontSize = 11.sp)
+                                        }
+
+                                        IconButton(
+                                            onClick = { onBookmark(item.lat, item.lng, item.title) },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Star,
+                                                contentDescription = "收藏",
+                                                tint = androidx.compose.ui.graphics.Color(0xFFFFB300),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
             }
         }
     )
