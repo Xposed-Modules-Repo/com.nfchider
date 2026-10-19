@@ -1,90 +1,45 @@
 # NFC Hider
-https://t.me/+eIEZ13o6HPU5NzBk
-  中国群921440494
+
+一款基于 Xposed / LSPosed 的 Android 模块：对目标应用隐藏 NFC 硬件，并支持 GPS 位置模拟与轨迹回放。
+
+**当前版本：8**
+
+- Telegram：https://t.me/+eIEZ13o6HPU5NzBk
+- 中国群：921440494
+- Issue：https://github.com/furina707/com.nfchider
+- 仓库：https://github.com/Xposed-Modules-Repo/com.nfchider
+
 [![构建状态](https://github.com/furina707/com.nfchider/actions/workflows/build.yml/badge.svg)](https://github.com/furina707/com.nfchider/actions/workflows/build.yml)
 
-一款基于现代 Xposed / LSPosed 框架的 Android 模块，支持对目标应用隐藏设备 NFC 硬件，并提供高自由度的地图轨迹 GPS 位置模拟与回放。
-
-**当前版本：6-1.1**
-
 ---
 
-## 🌟 核心特性
+## 功能
 
-### 1. 全局系统 Hook 模式（无需逐个选 App，App 内实时启闭）
-- **系统级深度拦截**：支持在系统框架层（`system_server` / `android`）拦截系统定位服务（`LocationManagerService`）与硬件分发（`LocationProviderManager`），实现**系统全局 Hook**。
-- **免选单独应用**：只需在 LSPosed 作用域中勾选「系统框架 (android)」，即可对全手机所有应用全局生效。
-- **App 内实时开关**：在 NFC Hider 应用内关闭开关即可立即停止 Hook，开启开关即可重新生效，无需重启设备。
+- **NFC 隐藏**：拦截 `PackageManager` / `NfcAdapter`，目标应用无法探测 NFC 硬件。
+- **定位模拟**：拦截 `LocationManager` / `FusedLocationProviderClient`，剥除 `isMock()` 标识，识别为真实定位。
+- **按应用生效**：LSPosed 勾选目标 App，重启生效；App 内总开关实时启停。
+- **多源地图**：高德（国内直连）、Google 卫星混合、OSM，异常自动诊断。
+- **地点搜索**：Photon + OSM Nominatim，支持地名/经纬度，一键设为模拟点或加入路线。
+- **轨迹与收藏**：GPX 导入导出、实地录制、循环/往返/单次、1~300 km/h；长按收藏地点。
+- **折叠面板**：底部面板可收起，不遮挡地图。
 
-### 2. 多源地图与智能诊断（高德国内直连 / Google 卫星 / OSM）
-- **国内高德地图极速直连**：内置国内高德标准矢量地图与高德高清卫星影像图，免代理直连，秒级加载；
-- **Google 卫星混合高精图层**：支持 Google Maps 卫星混合图层（高精卫星实景 + 道路/地标标注）以及标准 OSM 地图；
-- **地图网络与显示自诊断**：智能识别瓦片加载失败与异常，顶部即时提醒并支持一键切换国内高德或排查网络。
+## 使用
 
-### 3. 便捷位置选择、全网搜索与折叠面板
-- **定位与模拟二级菜单**：合并双定位图标为二级菜单，清晰区分「我的真实位置（GPS）」与「模拟虚拟位置」，支持平滑居中、开关跟随与以真实位置作为模拟起点；
-- **全网地点搜索**：内置 Photon 与 OSM Nominatim 全球/国内地理编码及坐标数值解析，搜索地名即可一键设为模拟点、加入路线或收藏；
-- **可折叠底部控制面板**：支持一键收小为极简指示条，大幅释放地图可视区域，防止遮挡航迹与标记；
-- **高频地点收藏夹**：支持在地图上长按任意地点快速收藏，或一键收藏当前物理定位；支持收藏点管理、飞达与加入路线；
-- **户外真实轨迹录制与 GPX 导入导出**：支持带着手机走动实地录制轨迹并一键转为模拟轨迹；支持循环、往返与单次运行及 1~300 km/h 速度调节；
-- **底层免检测**：系统底层剥除 `isMock()` / `isFromMockProvider()` 标识，各应用均识别为真实硬件定位。
+1. 安装并启用 LSPosed，勾选 **NFC Hider**。
+2. 作用域勾选目标 App，重启该 App。
+3. 打开 NFC Hider，用「Hook 总开关」实时启停。
+4. 进入地图切换图层、搜索地点、模拟定位或录制轨迹。
 
-### 4. NFC 硬件深度隐藏
-- 在系统底层拦截 NFC 软件特性查询（`PackageManager`）与硬件接口（`NfcAdapter`），隐藏设备 NFC 硬件，防止目标应用探测。
+## 环境
 
----
+- Android 10+（API 29+）
+- LSPosed / EdXposed（libxposed API 101+，Target 102）
 
-## 📖 使用指南
+## 编译
 
-1. 在手机上安装并打开 **LSPosed**；
-2. 在模块列表中找到 **NFC Hider** 并启用；
-3. **配置作用域**：
-   - 勾选**「系统框架 (android)」**即可实现全局生效（无需再逐个勾选单独 App）；
-   - 重启手机一次使系统框架 Hook 生效；
-4. **控制与使用**：
-   - 打开 **NFC Hider** 主界面，即可看到「全局系统 Hook」总开关；
-   - **在 App 内关闭开关**：即刻停止所有 Hook 拦截与位置模拟，各应用恢复真实系统状态；
-   - **在 App 内开启开关**：即刻重新启用全局拦截与位置模拟；
-5. **多源地图与图层切换**：
-   - 点击「打开位置模拟」进入地图；
-   - 默认支持高德矢量/卫星影像图（国内免代理直连）及 Google Maps 卫星混合图，点击右侧「🗺️/🛰️」按钮可秒级切换图层；
-   - 若遇到地图加载异常，顶部将自动弹出诊断警告并支持一键切换为国内高德地图；
-6. **定位二级菜单与地点搜索**：
-   - 点击右侧「🎯」定位按钮展开二级菜单，可分别选择「定位真实 GPS」或「移动到模拟位置/开启跟随」；
-   - 点击右侧「🔍」或在二级菜单/路线编辑栏中点击「搜点」，输入地名、商圈或经纬度，即可一键「设为模拟点」、「加入路线」或「查看/收藏」；
-7. **折叠控制面板与地点收藏**：
-   - 底部面板支持下滑/点击把手一键收起为极简条，不遮挡地图视野；
-   - 点击右侧「⭐」打开收藏夹，或在地图任意位置长按快速添加收藏点。
+需 JDK 17+、Compile SDK 37：
 
----
-
-## 📱 兼容性与运行环境
-
-- **系统要求**：Android 10+（API 29+）
-- **框架支持**：LSPosed / EdXposed（libxposed API 101+，Target 102）
-
----
-
-## 🛠️ 本地编译与构建
-
-项目采用 Jetpack Compose 构建现代化 Android 界面，本地编译环境要求：
-- **JDK**：JDK 17+
-- **Android SDK**：Compile SDK 37
-
-编译命令：
 ```bash
 git clone https://github.com/Xposed-Modules-Repo/com.nfchider.git
 cd com.nfchider
-
-# 编译 Release 版本 APK
 ./gradlew assembleRelease
-```
-
-编译输出目录：
-- `app/build/outputs/apk/release/NfcHider-6-1.1.apk`
-
----
-
-## 📄 开源许可证
-
-本项目基于 [MIT License](LICENSE) 许可证开源。
