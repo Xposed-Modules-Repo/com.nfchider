@@ -171,3 +171,30 @@ data class BadgePalette(
         fun forDark(dark: Boolean): BadgePalette = if (dark) Dark else Light
     }
 }
+
+/**
+ * 快捷功能圆形色板（Firefox 快捷方式风格）。
+ *
+ * 设计参考 Firefox 新建标签页的「快捷方式」：每个功能是一个**独立的实色圆盘**
+ * （favicon 或字母磁贴），高饱和色 + 白色字形，保证在卫星图/矢量图等复杂
+ * 底图上的可辨识性；标签文字放在圆盘下方，与圆盘共同构成一个功能单元。
+ *
+ * 选用原则：
+ * - 每个功能一个独立色相，相邻功能色相拉开距离（避免混淆）；
+ * - 颜色不随明暗主题切换——实色圆盘 + 白字形在深浅底图上都成立，
+ *   主题相关的是面板 Surface 与标签文字（由 MaterialTheme 负责）；
+ * - 成对功能（放大/缩小）共用色相，表明同属一个分组。
+ */
+object QuickFunctionColors {
+    val Zoom = Color(0xFF64748B)      // 石板灰：放大 / 缩小（成对分组）
+    val Layers = Color(0xFF2563EB)    // 蓝：切换地图图层
+    val Bookmark = Color(0xFFF59E0B)  // 琥珀：地点收藏
+    val Search = Color(0xFF7C3AED)    // 紫：搜索地点
+    val Locate = Color(0xFF16A34A)    // 绿：定位与目标位置
+    val Follow = Color(0xFF0D9488)    // 青绿：模拟移动跟随（开关）
+    val Record = Color(0xFFDC2626)    // 红：录制真实轨迹（开关）
+    val Diagnose = Color(0xFFEA580C)  // 橙：定位诊断
+    val Mark = Color(0xFFDB2777)      // 玫红：地图标记模式（开关）
+    val SimPoint = Color(0xFF0284C7)  // 天蓝：移动到模拟点
+    val RealAsSim = Color(0xFF65A30D) // 草绿：将真实位置设为模拟点
+}

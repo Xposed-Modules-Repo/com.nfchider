@@ -38,16 +38,20 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.GpsFixed
+import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Speed
@@ -68,6 +72,9 @@ import com.nfchider.location.LocationSearchService
 import com.nfchider.location.MapDiagnostics
 import com.nfchider.location.MapSourceItem
 import com.nfchider.location.SearchResultPlace
+import com.nfchider.ui.QuickFunction
+import com.nfchider.ui.QuickFunctionsPanel
+import com.nfchider.ui.theme.QuickFunctionColors
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.material3.Button
@@ -197,6 +204,10 @@ fun LocationSimScreen() {
     var diagnosticReport by remember {
         mutableStateOf(LocationSelfTest.runDiagnostics(context, config, mapDiagnosticResult))
     }
+
+    // 「快捷功能」面板状态（Firefox 快捷方式风格：每个功能一个独立圆形）
+    var quickPanelOpen by remember { mutableStateOf(true) }
+    var quickPanelShowAll by remember { mutableStateOf(false) }
 
     // 地图覆盖层语义色板（随系统暗色模式切换）
     val mapPalette = MapPalette.forDark(isMapDark())
@@ -543,7 +554,8 @@ fun LocationSimScreen() {
                 Card(
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(top = 12.dp, start = 12.dp, end = 76.dp)
+                        // 右侧留白随「快捷功能」面板开合变化，避免互相遮挡
+                        .padding(top = 12.dp, start = 12.dp, end = if (quickPanelOpen) 272.dp else 76.dp)
                         .fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(
@@ -642,7 +654,7 @@ fun LocationSimScreen() {
                     color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.85f)
                 ) {
                     Text(
-                        text = "点击右上角「定位」直接回到当前位置；\n开启「标记」点击地图添加点，长按地图或点击「⭐」收藏地点；下方可现场「录制轨迹」。",
+                        text = "右上角「快捷功能」面板：圆形按钮直达定位/搜索/收藏/录制；\n开启「标记」点击地图添加点，长按地图或点「⭐」收藏地点；下方可现场「录制轨迹」。",
                         modifier = Modifier.padding(14.dp),
                         color = MaterialTheme.colorScheme.inverseOnSurface,
                         fontSize = 13.sp,
@@ -652,58 +664,141 @@ fun LocationSimScreen() {
             }
 
             // --------------------------------------------------------------
-            // 右侧浮动快捷按钮组（缩放、定位到当前位置、跟随模拟位置、图层与收藏）
+            // 右侧「快捷功能」面板（Firefox 快捷方式风格：每个功能一个独立圆形）
+            // 取代原先右侧纵向 FAB 列：圆盘 + 标签 + 4 列网格，功能更多却不占
+            // 竖向空间；「显示全部」收纳诊断/标记等次要功能。
             // --------------------------------------------------------------
-            Column(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                MapFab(
-                    icon = Icons.Filled.ZoomIn,
-                    contentDescription = "放大"
-                ) { mapView.controller.zoomIn() }
-                MapFab(
-                    icon = Icons.Filled.ZoomOut,
-                    contentDescription = "缩小"
-                ) { mapView.controller.zoomOut() }
 
-                // 地图图层切换 (高德/Google/OSM)
-                MapFab(
-                    icon = Icons.Filled.Layers,
-                    contentDescription = "切换地图图层"
-                ) {
-                    showMapSourceDialog = true
-                }
-
-                // 地点收藏夹
-                MapFab(
-                    icon = Icons.Filled.Star,
-                    contentDescription = "地点收藏",
-                    tint = mapPalette.bookmarkFill
-                ) {
-                    showBookmarksDialog = true
-                }
-
-                // 快捷地点搜索 (寻找/设置模拟位置)
-                MapFab(
-                    icon = Icons.Filled.Search,
-                    contentDescription = "搜索地点",
-                    tint = MaterialTheme.colorScheme.primary
-                ) {
-                    showSearchLocationDialog = true
-                }
-
-                // 定位与模拟位置二级菜单 (合并原先容易混淆的双Pin定位按钮)
-                MapFab(
-                    icon = Icons.Filled.MyLocation,
-                    contentDescription = "定位与目标位置",
-                    tint = if (follow) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                ) {
-                    showLocationMenuDialog = true
+            // 面板与定位二级菜单共用的动作（同一行为两个入口，逻辑只此一份）
+            val locateRealAction: () -> Unit = {
+                if (!tracker.hasLocationPermission()) {
+                    permissionLauncher.launch(locationPermissions)
+                } else if (!tracker.isLocationProviderEnabled()) {
+                    Toast.makeText(context, "请在手机系统设置中开启定位服务 (GPS)", Toast.LENGTH_LONG).show()
+                } else {
+                    val loc = realLocation
+                    if (loc != null) {
+                        mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
+                        if (mapView.zoomLevelDouble < 15.0) {
+                            mapView.controller.setZoom(16.0)
+                        }
+                        Toast.makeText(context, "已定位到当前真实物理位置", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "正在获取真实定位，请稍候...", Toast.LENGTH_SHORT).show()
+                        tracker.startLocationUpdates()
+                    }
                 }
             }
+            val useRealAsSimAction: () -> Unit = {
+                val loc = realLocation
+                if (loc != null) {
+                    update { b ->
+                        b.points().clear()
+                        b.points().add(TrajectoryConfig.Point(loc.latitude, loc.longitude, Double.NaN))
+                        b.enabled(true)
+                        b.startAt(System.currentTimeMillis())
+                    }
+                    mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
+                    Toast.makeText(context, "已将真实物理位置设为模拟位置", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "尚未获取到真实定位，无法设为模拟点", Toast.LENGTH_SHORT).show()
+                }
+            }
+            val moveToSimAction: () -> Unit = {
+                val p = simPos
+                val first = config.points.firstOrNull()
+                val targetLat = p?.lat ?: first?.lat
+                val targetLng = p?.lng ?: first?.lng
+                if (targetLat != null && targetLng != null) {
+                    mapView.controller.animateTo(GeoPoint(targetLat, targetLng))
+                    if (mapView.zoomLevelDouble < 15.0) {
+                        mapView.controller.setZoom(16.0)
+                    }
+                    Toast.makeText(context, "已移动到模拟位置", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "尚未设置模拟位置，请搜索地点或在地图上标记", Toast.LENGTH_SHORT).show()
+                }
+            }
+            val toggleFollowAction: () -> Unit = {
+                follow = !follow
+                if (follow) {
+                    val p = simPos
+                    val first = config.points.firstOrNull()
+                    val targetLat = p?.lat ?: first?.lat
+                    val targetLng = p?.lng ?: first?.lng
+                    if (targetLat != null && targetLng != null) {
+                        mapView.controller.animateTo(GeoPoint(targetLat, targetLng))
+                    }
+                    Toast.makeText(context, "已开启模拟移动跟随", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "已关闭模拟移动跟随", Toast.LENGTH_SHORT).show()
+                }
+            }
+            val startRecordingAction: () -> Unit = {
+                if (config.enabled) {
+                    Toast.makeText(context, "请先停止模拟定位后再录制真实轨迹", Toast.LENGTH_SHORT).show()
+                } else if (!tracker.hasLocationPermission()) {
+                    permissionLauncher.launch(locationPermissions)
+                } else if (!tracker.isLocationProviderEnabled()) {
+                    Toast.makeText(context, "请在手机系统设置中开启定位服务 (GPS)", Toast.LENGTH_LONG).show()
+                } else {
+                    tracker.startRecording()
+                    Toast.makeText(context, "开始录制路线，带着手机移动即可", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            QuickFunctionsPanel(
+                functions = listOf(
+                    QuickFunction(Icons.Filled.ZoomIn, "放大", QuickFunctionColors.Zoom) {
+                        mapView.controller.zoomIn()
+                    },
+                    QuickFunction(Icons.Filled.ZoomOut, "缩小", QuickFunctionColors.Zoom) {
+                        mapView.controller.zoomOut()
+                    },
+                    QuickFunction(Icons.Filled.Layers, "图层", QuickFunctionColors.Layers) {
+                        showMapSourceDialog = true
+                    },
+                    QuickFunction(Icons.Filled.Star, "收藏", QuickFunctionColors.Bookmark) {
+                        showBookmarksDialog = true
+                    },
+                    QuickFunction(Icons.Filled.Search, "搜索", QuickFunctionColors.Search) {
+                        showSearchLocationDialog = true
+                    },
+                    QuickFunction(Icons.Filled.MyLocation, "定位", QuickFunctionColors.Locate) {
+                        showLocationMenuDialog = true
+                    },
+                    QuickFunction(
+                        Icons.Filled.Navigation, "跟随", QuickFunctionColors.Follow,
+                        active = follow
+                    ) { toggleFollowAction() },
+                    QuickFunction(
+                        Icons.Filled.FiberManualRecord, "录制", QuickFunctionColors.Record,
+                        active = recordingState == RealLocationTracker.RecordingState.RECORDING,
+                        enabled = recordingState == RealLocationTracker.RecordingState.IDLE
+                    ) { startRecordingAction() },
+                    QuickFunction(Icons.Filled.HealthAndSafety, "诊断", QuickFunctionColors.Diagnose) {
+                        showDiagnosticDialog = true
+                    },
+                    QuickFunction(
+                        Icons.Filled.AddLocation, "标记", QuickFunctionColors.Mark,
+                        active = markMode,
+                        enabled = !config.enabled
+                    ) { markMode = !markMode },
+                    QuickFunction(Icons.Filled.Place, "去模拟点", QuickFunctionColors.SimPoint) {
+                        moveToSimAction()
+                    },
+                    QuickFunction(Icons.Filled.GpsFixed, "真迹设点", QuickFunctionColors.RealAsSim) {
+                        useRealAsSimAction()
+                    }
+                ),
+                open = quickPanelOpen,
+                onOpenChange = { quickPanelOpen = it },
+                showAll = quickPanelShowAll,
+                onShowAllChange = { quickPanelShowAll = it },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+            )
 
             // --------------------------------------------------------------
             // 底部控制面板（模拟控制 / 实时轨迹录制控制）
@@ -1458,70 +1553,11 @@ fun LocationSimScreen() {
                     hasLocationPermission = tracker.hasLocationPermission(),
                     isProviderEnabled = tracker.isLocationProviderEnabled(),
                     onDismiss = { showLocationMenuDialog = false },
-                    onLocateReal = {
-                        if (!tracker.hasLocationPermission()) {
-                            permissionLauncher.launch(locationPermissions)
-                        } else if (!tracker.isLocationProviderEnabled()) {
-                            Toast.makeText(context, "请在手机系统设置中开启定位服务 (GPS)", Toast.LENGTH_LONG).show()
-                        } else {
-                            val loc = realLocation
-                            if (loc != null) {
-                                mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
-                                if (mapView.zoomLevelDouble < 15.0) {
-                                    mapView.controller.setZoom(16.0)
-                                }
-                                Toast.makeText(context, "已定位到当前真实物理位置", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "正在获取真实定位，请稍候...", Toast.LENGTH_SHORT).show()
-                                tracker.startLocationUpdates()
-                            }
-                        }
-                    },
-                    onUseRealAsSim = {
-                        val loc = realLocation
-                        if (loc != null) {
-                            update { b ->
-                                b.points().clear()
-                                b.points().add(TrajectoryConfig.Point(loc.latitude, loc.longitude, Double.NaN))
-                                b.enabled(true)
-                                b.startAt(System.currentTimeMillis())
-                            }
-                            mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
-                            Toast.makeText(context, "已将真实物理位置设为模拟位置", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "尚未获取到真实定位，无法设为模拟点", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onMoveToSim = {
-                        val p = simPos
-                        val first = config.points.firstOrNull()
-                        val targetLat = p?.lat ?: first?.lat
-                        val targetLng = p?.lng ?: first?.lng
-                        if (targetLat != null && targetLng != null) {
-                            mapView.controller.animateTo(GeoPoint(targetLat, targetLng))
-                            if (mapView.zoomLevelDouble < 15.0) {
-                                mapView.controller.setZoom(16.0)
-                            }
-                            Toast.makeText(context, "已移动到模拟位置", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "尚未设置模拟位置，请搜索地点或在地图上标记", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onToggleFollow = {
-                        follow = !follow
-                        if (follow) {
-                            val p = simPos
-                            val first = config.points.firstOrNull()
-                            val targetLat = p?.lat ?: first?.lat
-                            val targetLng = p?.lng ?: first?.lng
-                            if (targetLat != null && targetLng != null) {
-                                mapView.controller.animateTo(GeoPoint(targetLat, targetLng))
-                            }
-                            Toast.makeText(context, "已开启模拟移动跟随", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "已关闭模拟移动跟随", Toast.LENGTH_SHORT).show()
-                        }
-                    },
+                    // 与「快捷功能」面板共用同一批动作（定义见面板处），避免两套逻辑漂移
+                    onLocateReal = locateRealAction,
+                    onUseRealAsSim = useRealAsSimAction,
+                    onMoveToSim = moveToSimAction,
+                    onToggleFollow = toggleFollowAction,
                     onOpenSearch = {
                         showSearchLocationDialog = true
                     }
@@ -1637,6 +1673,10 @@ private fun createBookmarkDrawable(context: Context, palette: MapPalette): Drawa
 
 /**
  * 地图浮动操作按钮：44dp 触控目标 + 语义化无障碍描述。
+ *
+ * 注：地图功能入口已改为 Firefox 快捷方式风格的「快捷功能」面板
+ * （见 [QuickFunctionsPanel]），每个功能一个独立圆形 + 标签；
+ * 此组件保留给面板之外确实需要单个浮动按钮的场景使用。
  */
 @Composable
 private fun MapFab(

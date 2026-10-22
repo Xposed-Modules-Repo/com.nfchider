@@ -1,6 +1,6 @@
 # NFC Hider 界面设计优化方案
 
-> 版本：v1.1 (versionCode 9) ｜ 设计系统：Stealth Azure「隐匿蓝」
+> 版本：v1.1 ｜ 设计系统：Stealth Azure「隐匿蓝」｜ versionCode 随 CI 自动递增
 > 本文档记录界面层的问题诊断、设计系统重建与关键界面改造方案。
 
 ---
@@ -65,18 +65,28 @@ MapPalette.Dark   // 暗底瓦片：路线 #7FB0FF / 录制 #5EFC82 / 收藏 #FF
 
 ## 3. 关键界面改造
 
-### 3.1 地图浮动按钮组（右侧）
+### 3.1 地图功能入口：Firefox 快捷方式风格「快捷功能」面板（右侧）
 
-| 按钮 | 旧实现 | 新实现 |
+> 设计范式学习自 Firefox Android 新建标签页的「快捷方式」：**每个功能是一个独立的圆形**（favicon 或字母磁贴），圆下方跟一个小号标签，4 列网格排布，次要功能收入「显示全部」。原右侧纵向 FAB 列（7 个 44dp 半透明圆按钮竖向排列）存在三个问题：功能多时竖向占位过高、无标签依赖用户记忆图标、入口数量受高度限制。
+
+| 维度 | 旧实现（纵向 FAB 列） | 新实现（快捷功能面板） |
 | --- | --- | --- |
-| 放大 | `Icons.Filled.Add` | `Icons.Filled.ZoomIn`，描述「放大」 |
-| 缩小 | 文本 `"-"` | `Icons.Filled.ZoomOut`，描述「缩小」 |
-| 图层 | emoji `🛰️/🗺️` | `Icons.Filled.Layers`，描述「切换地图图层」 |
-| 收藏 | `Icons.Filled.Star` | 保留，描述「地点收藏」 |
-| 搜索 | `Icons.Filled.Search` | 保留，描述「搜索地点」 |
-| 定位菜单 | `Icons.Filled.LocationOn` | `Icons.Filled.MyLocation`（十字准星更贴合「定位到我的位置」），描述「定位与目标位置」 |
+| 布局 | 右侧纵向单列，7 个按钮 ≈ 360dp 高 | 4 列网格，8 个核心功能 ≈ 170dp 高，**竖向占位减半** |
+| 识别 | 仅图标，无文字 | 圆盘 + 10sp 标签（1-2 行），图标语义自解释 |
+| 容量 | 受屏幕高度限制 | 「显示全部」展开 12 个功能，折叠时只露 8 个 |
+| 色彩 | 半透明 Surface + 单色 icon tint | **实色圆盘 + 白色字形**（`QuickFunctionColors` 12 个独立色相），卫星图/矢量图复杂底图上均清晰 |
+| 状态 | 无（跟随态仅靠 tint 变化，难以察觉） | 开关类功能（跟随/标记/录制）激活态 = 圆盘外缘 2.5dp 白色描边；禁用态 = 整体 38% 透明度 |
+| 折叠 | 无 | 标题行点击整面板折叠为药丸，把地图面积还给用户；顶部告警条右侧留白随面板开合动态避让 |
 
-同时：FAB 增加触觉反馈（长按收藏）、统一 44dp 尺寸与半透明Surface底色。
+核心功能（常驻 8 个）：放大 / 缩小 / 图层 / 收藏 / 搜索 / 定位 / 跟随 / 录制；
+「显示全部」收纳 4 个次要功能：诊断 / 标记 / 去模拟点 / 真迹设点。
+
+实现要点：
+
+- `ui/QuickFunctionsPanel.kt`：`QuickFunction` 数据类（图标 + 标签 + 圆盘色 + 激活/禁用态 + 动作）→ `QuickFunctionsPanel`（Surface 20dp 圆角 + 标题行 + `chunked(4)` 网格 + AnimatedVisibility 展开动画）→ `FunctionCircle`（48dp 圆盘 + 21dp 白字形 + 标签，圆盘 `semantics` 带 `contentDescription`、标签 `clearAndSetSemantics` 避免无障碍朗读重复）；
+- `ui/theme/Color.kt` 新增 `QuickFunctionColors`：每个功能一个独立色相，相邻功能色相拉开距离；成对功能（放大/缩小）共用色相表示分组；颜色不随明暗主题切换（实色圆盘 + 白字形在深浅底图上都成立）；
+- 面板与「定位二级菜单」对话框**共用同一批动作 lambda**（定位/设模拟点/去模拟点/跟随/录制），两个入口行为不会漂移；
+- 旧 `MapFab` 组件保留（面板之外需要单个浮动按钮时使用），地图功能入口全部迁移至面板。
 
 ### 3.2 地图覆盖层
 
@@ -108,9 +118,10 @@ MapPalette.Dark   // 暗底瓦片：路线 #7FB0FF / 录制 #5EFC82 / 收藏 #FF
 
 ## 4. 落地清单
 
-- [x] `ui/theme/Color.kt`：品牌色板 + 中性色阶 + `MapPalette`
+- [x] `ui/theme/Color.kt`：品牌色板 + 中性色阶 + `MapPalette` + `BadgePalette` + `QuickFunctionColors`
 - [x] `ui/theme/Theme.kt`：完整 light/dark colorScheme + Shapes + 默认关闭动态取色
 - [x] `ui/theme/Type.kt`：15 档排版 + `MonoNumeric`
 - [x] `app/build.gradle.kts`：引入 `material-icons-extended`（release 有资源混淆，未引用图标被剥离）
-- [x] `MapActivity.kt`：FAB 语义图标 + 无障碍描述 + 地图覆盖层主题化 + 长按震动
+- [x] `ui/QuickFunctionsPanel.kt`：Firefox 快捷方式风格功能面板（独立圆形 + 标签 + 4 列网格 + 显示全部）
+- [x] `MapActivity.kt`：FAB 列迁移至快捷功能面板 + 地图覆盖层主题化 + 长按震动 + 真实定位择优（BUG-13）
 - [x] `SettingsActivity.kt`：卡片引导图标与层级统一
