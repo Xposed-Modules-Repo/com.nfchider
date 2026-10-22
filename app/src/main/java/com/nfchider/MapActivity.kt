@@ -7,6 +7,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Bundle
+import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -37,16 +38,23 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.OutlinedTextField
@@ -91,6 +99,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -103,7 +112,11 @@ import com.nfchider.location.RealLocationTracker
 import com.nfchider.location.SimConfigRepository
 import com.nfchider.location.TrajectoryConfig
 import com.nfchider.location.TrajectoryEngine
+import com.nfchider.ui.theme.BadgePalette
+import com.nfchider.ui.theme.LocalBadgePalette
+import com.nfchider.ui.theme.MapPalette
 import com.nfchider.ui.theme.NfcHiderTheme
+import com.nfchider.ui.theme.isMapDark
 import kotlinx.coroutines.delay
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -173,6 +186,9 @@ fun LocationSimScreen() {
     val recordingDurationSec by tracker.recordingDurationSec.collectAsState()
 
     var hasCenteredToRealLocation by remember { mutableStateOf(false) }
+    // BUG-13 fix: 首个 fix 可能是粗精度网络定位（百米级），直接居中会把地图
+    // 锁死在错误位置。等待高精度 fix；超过宽限时间(10s)后按当前最佳定位居中。
+    var realLocationCenterGraceElapsed by remember { mutableStateOf(false) }
     var showRecordingFinishDialog by remember { mutableStateOf(false) }
     var completedTrackPoints by remember { mutableStateOf<List<TrajectoryConfig.Point>>(emptyList()) }
     var showCancelRecordingConfirm by remember { mutableStateOf(false) }
@@ -181,6 +197,9 @@ fun LocationSimScreen() {
     var diagnosticReport by remember {
         mutableStateOf(LocationSelfTest.runDiagnostics(context, config, mapDiagnosticResult))
     }
+
+    // 地图覆盖层语义色板（随系统暗色模式切换）
+    val mapPalette = MapPalette.forDark(isMapDark())
 
     val locationPermissions = arrayOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
@@ -253,22 +272,18 @@ fun LocationSimScreen() {
 
     val tapHandler = remember { mutableStateOf<(GeoPoint) -> Unit>({}) }
 
-    // 模拟路线折线（天蓝色）
+    // 模拟路线折线（主题语义蓝）
     val routeLine = remember {
-        Polyline().apply {
-            outlinePaint.color = Color.parseColor("#3F8CFF")
-            outlinePaint.strokeWidth = 9f
-        }
+        Polyline().apply { outlinePaint.strokeWidth = 9f }
     }
 
-    // 真实录制航迹折线（亮翠绿色）
+    // 真实录制航迹折线（主题语义绿）
     val recordRouteLine = remember {
-        Polyline().apply {
-            outlinePaint.color = Color.parseColor("#00C853")
-            outlinePaint.strokeWidth = 10f
-        }
+        Polyline().apply { outlinePaint.strokeWidth = 10f }
     }
 
+    // 暗色模式切换时同步覆盖层颜色（避免重建 Polyline 导致 overlay 错位）。
+    // 注意：必须位于 mapView 声明之后（LaunchedEffect 内引用 mapView）。
     val mapView = remember {
         MapView(context).apply {
             setTileSource(currentMapSource.getTileSource())
@@ -289,6 +304,9 @@ fun LocationSimScreen() {
 
                 override fun longPressHelper(p: GeoPoint?): Boolean {
                     if (p != null) {
+                        // 长按收藏：先给触觉反馈，再弹命名对话框。
+                        // this@apply 即 MapView（对象表达式内 this 已被遮蔽）。
+                        this@apply.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                         targetBookmarkPoint = p
                         showAddBookmarkDialog = true
                     }
@@ -298,6 +316,12 @@ fun LocationSimScreen() {
             overlays.add(routeLine)
             overlays.add(recordRouteLine)
         }
+    }
+
+    LaunchedEffect(mapPalette) {
+        routeLine.outlinePaint.color = mapPalette.routeLine.toArgb()
+        recordRouteLine.outlinePaint.color = mapPalette.recordLine.toArgb()
+        mapView.invalidate()
     }
 
     // 模拟位置指示器（默认红色图标 Marker）
@@ -312,7 +336,7 @@ fun LocationSimScreen() {
     // 我的真实物理位置标记（蓝色光晕圆点）
     val myLocationMarker = remember {
         Marker(mapView).apply {
-            icon = createMyLocationDrawable(context)
+            icon = createMyLocationDrawable(context, mapPalette)
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
             title = "我的真实位置"
             isEnabled = false
@@ -322,7 +346,7 @@ fun LocationSimScreen() {
     // 地点收藏标记列表与路线航点标记列表
     val bookmarkMarkers = remember { mutableListOf<Marker>() }
     val waypointMarkers = remember { mutableListOf<Marker>() }
-    val bookmarkDrawable = remember { createBookmarkDrawable(context) }
+    val bookmarkDrawable = remember(mapPalette) { createBookmarkDrawable(context, mapPalette) }
 
     tapHandler.value = { geo ->
         if (recordingState != RealLocationTracker.RecordingState.IDLE) {
@@ -341,20 +365,31 @@ fun LocationSimScreen() {
     }
 
     // 收到真实物理定位时：更新我的位置蓝点；初次定位且无模拟点时自动居中到真实位置
-    LaunchedEffect(realLocation) {
+    // BUG-13 fix: 仅当首个 fix 精度足够（<=100m）或宽限时间已到时才居中，
+    // 避免粗精度基站定位把地图锁死在错误位置（GPS 通常随后几秒内收敛）。
+    LaunchedEffect(realLocation, realLocationCenterGraceElapsed) {
         val loc = realLocation
         if (loc != null) {
             myLocationMarker.isEnabled = true
             myLocationMarker.position = GeoPoint(loc.latitude, loc.longitude)
             if (!hasCenteredToRealLocation && config.points.isEmpty()) {
-                hasCenteredToRealLocation = true
-                mapView.controller.setZoom(15.5)
-                mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
+                val accurateEnough = !loc.hasAccuracy() || loc.accuracy <= 100f
+                if (accurateEnough || realLocationCenterGraceElapsed) {
+                    hasCenteredToRealLocation = true
+                    mapView.controller.setZoom(15.5)
+                    mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
+                }
             }
         } else {
             myLocationMarker.isEnabled = false
         }
         mapView.invalidate()
+    }
+
+    // 自动居中宽限计时：10 秒后无论当前定位精度如何都按最佳定位居中一次
+    LaunchedEffect(Unit) {
+        delay(10_000L)
+        realLocationCenterGraceElapsed = true
     }
 
     // 录制航迹点变化时：刷新录制折线
@@ -365,7 +400,10 @@ fun LocationSimScreen() {
     }
 
     // 模拟配置轨迹点列表变更时：重绘路线与航点标记
-    LaunchedEffect(config.points.size) {
+    // BUG-03 fix: key on the list instance, not its size. Builder.build() always
+    // allocates a new ArrayList, so an equal-size replacement (GPX import,
+    // recorded track applied as route) still triggers a redraw.
+    LaunchedEffect(config.points) {
         val overlays = mapView.overlays
         waypointMarkers.forEach { overlays.remove(it) }
         waypointMarkers.clear()
@@ -425,7 +463,21 @@ fun LocationSimScreen() {
         } else {
             posMarker.isEnabled = true
             posMarker.position = GeoPoint(p.lat, p.lng)
-            if (follow) mapView.controller.animateTo(GeoPoint(p.lat, p.lng))
+            // BUG-08 fix: re-issuing animateTo() on every 500 ms tick restarts
+            // the animation and makes the map stutter. Jump when the camera is
+            // already close, animate only for larger displacements.
+            if (follow) {
+                val target = GeoPoint(p.lat, p.lng)
+                val center = mapView.mapCenter
+                val jumpM = RealLocationTracker.distanceBetween(
+                    center.latitude, center.longitude, p.lat, p.lng
+                )
+                if (jumpM < 30.0) {
+                    mapView.controller.setCenter(target)
+                } else {
+                    mapView.controller.animateTo(target)
+                }
+            }
         }
         mapView.invalidate()
     }
@@ -608,12 +660,19 @@ fun LocationSimScreen() {
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                MapFab(icon = Icons.Filled.Add) { mapView.controller.zoomIn() }
-                MapFabText(label = "-") { mapView.controller.zoomOut() }
+                MapFab(
+                    icon = Icons.Filled.ZoomIn,
+                    contentDescription = "放大"
+                ) { mapView.controller.zoomIn() }
+                MapFab(
+                    icon = Icons.Filled.ZoomOut,
+                    contentDescription = "缩小"
+                ) { mapView.controller.zoomOut() }
 
                 // 地图图层切换 (高德/Google/OSM)
-                MapFabText(
-                    label = if (currentMapSource == MapSourceItem.AMAP_SATELLITE || currentMapSource == MapSourceItem.GOOGLE_HYBRID) "🛰️" else "🗺️"
+                MapFab(
+                    icon = Icons.Filled.Layers,
+                    contentDescription = "切换地图图层"
                 ) {
                     showMapSourceDialog = true
                 }
@@ -621,7 +680,8 @@ fun LocationSimScreen() {
                 // 地点收藏夹
                 MapFab(
                     icon = Icons.Filled.Star,
-                    tint = androidx.compose.ui.graphics.Color(0xFFFFB300)
+                    contentDescription = "地点收藏",
+                    tint = mapPalette.bookmarkFill
                 ) {
                     showBookmarksDialog = true
                 }
@@ -629,6 +689,7 @@ fun LocationSimScreen() {
                 // 快捷地点搜索 (寻找/设置模拟位置)
                 MapFab(
                     icon = Icons.Filled.Search,
+                    contentDescription = "搜索地点",
                     tint = MaterialTheme.colorScheme.primary
                 ) {
                     showSearchLocationDialog = true
@@ -636,7 +697,8 @@ fun LocationSimScreen() {
 
                 // 定位与模拟位置二级菜单 (合并原先容易混淆的双Pin定位按钮)
                 MapFab(
-                    icon = Icons.Filled.LocationOn,
+                    icon = Icons.Filled.MyLocation,
+                    contentDescription = "定位与目标位置",
                     tint = if (follow) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                 ) {
                     showLocationMenuDialog = true
@@ -699,8 +761,8 @@ fun LocationSimScreen() {
                                     color = when {
                                         recordingState != RealLocationTracker.RecordingState.IDLE ->
                                             if (recordingState == RealLocationTracker.RecordingState.RECORDING)
-                                                androidx.compose.ui.graphics.Color(0xFFE53935)
-                                            else androidx.compose.ui.graphics.Color(0xFF9E9E9E)
+                                                mapPalette.statusRecording
+                                            else mapPalette.statusPaused
                                         config.enabled -> MaterialTheme.colorScheme.primary
                                         else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                                     }
@@ -796,7 +858,7 @@ fun LocationSimScreen() {
                                         Surface(
                                             modifier = Modifier.size(10.dp),
                                             shape = CircleShape,
-                                            color = if (recordingState == RealLocationTracker.RecordingState.RECORDING) androidx.compose.ui.graphics.Color(0xFFE53935) else androidx.compose.ui.graphics.Color(0xFF9E9E9E)
+                                            color = if (recordingState == RealLocationTracker.RecordingState.RECORDING) mapPalette.statusRecording else mapPalette.statusPaused
                                         ) {}
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
@@ -997,6 +1059,13 @@ fun LocationSimScreen() {
 
                         // 速度控制
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Filled.Speed,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(text = "速度", style = MaterialTheme.typography.labelMedium)
                             Spacer(modifier = Modifier.width(12.dp))
                             Slider(
@@ -1113,7 +1182,7 @@ fun LocationSimScreen() {
                                 Surface(
                                     modifier = Modifier.size(8.dp),
                                     shape = CircleShape,
-                                    color = androidx.compose.ui.graphics.Color(0xFFE53935)
+                                    color = mapPalette.statusRecording
                                 ) {}
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("录制轨迹", fontSize = 12.sp)
@@ -1510,9 +1579,10 @@ fun LocationSimScreen() {
 }
 
 /**
- * 动态纯代码生成高品质定位蓝点 Drawable（带半透明光晕与深蓝核心）
+ * 动态纯代码生成高品质定位蓝点 Drawable（带半透明光晕与核心）
+ * 颜色取自 [MapPalette]，暗色模式下自动提高明度。
  */
-private fun createMyLocationDrawable(context: Context): Drawable {
+private fun createMyLocationDrawable(context: Context, palette: MapPalette): Drawable {
     val density = context.resources.displayMetrics.density
     val size = (24 * density).toInt().coerceAtLeast(24)
     val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
@@ -1521,25 +1591,26 @@ private fun createMyLocationDrawable(context: Context): Drawable {
     val radius = size / 2f
 
     val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-    // 外层半透明天蓝光晕
-    paint.color = Color.parseColor("#332196F3")
+    // 外层半透明光晕
+    paint.color = palette.realLocationHalo.toArgb()
     canvas.drawCircle(center, center, radius, paint)
 
     // 中层白色边框
     paint.color = Color.WHITE
     canvas.drawCircle(center, center, radius * 0.62f, paint)
 
-    // 内层核心深蓝圆点
-    paint.color = Color.parseColor("#1976D2")
+    // 内层核心圆点
+    paint.color = palette.realLocationCore.toArgb()
     canvas.drawCircle(center, center, radius * 0.45f, paint)
 
     return BitmapDrawable(context.resources, bitmap)
 }
 
 /**
- * 动态纯代码生成金黄色星标收藏地点 Drawable
+ * 动态纯代码生成星标收藏地点 Drawable
+ * 颜色取自 [MapPalette]，暗色模式下自动提高明度。
  */
-private fun createBookmarkDrawable(context: Context): Drawable {
+private fun createBookmarkDrawable(context: Context, palette: MapPalette): Drawable {
     val density = context.resources.displayMetrics.density
     val size = (30 * density).toInt().coerceAtLeast(30)
     val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
@@ -1548,7 +1619,7 @@ private fun createBookmarkDrawable(context: Context): Drawable {
     val radius = size / 2f * 0.82f
 
     val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-    paint.color = Color.parseColor("#FFB300")
+    paint.color = palette.bookmarkFill.toArgb()
     paint.style = android.graphics.Paint.Style.FILL
     canvas.drawCircle(center, center, radius, paint)
 
@@ -1558,38 +1629,37 @@ private fun createBookmarkDrawable(context: Context): Drawable {
     canvas.drawCircle(center, center, radius, paint)
 
     paint.style = android.graphics.Paint.Style.FILL
-    paint.color = Color.parseColor("#E65100")
+    paint.color = palette.bookmarkCore.toArgb()
     canvas.drawCircle(center, center, radius * 0.42f, paint)
 
     return BitmapDrawable(context.resources, bitmap)
 }
 
+/**
+ * 地图浮动操作按钮：44dp 触控目标 + 语义化无障碍描述。
+ */
 @Composable
-private fun MapFab(icon: ImageVector, tint: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface, onClick: () -> Unit) {
+private fun MapFab(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface,
+    onClick: () -> Unit
+) {
     Surface(
+        modifier = Modifier.size(44.dp),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
         shadowElevation = 4.dp
     ) {
-        IconButton(onClick = onClick) {
-            Icon(icon, contentDescription = null, tint = tint)
-        }
-    }
-}
-
-@Composable
-private fun MapFabText(label: String, onClick: () -> Unit) {
-    Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-        shadowElevation = 4.dp
-    ) {
-        IconButton(onClick = onClick) {
-            Text(
-                text = label,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier.size(44.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = tint,
+                modifier = Modifier.size(22.dp)
             )
         }
     }
@@ -1900,6 +1970,7 @@ fun MapSourceDialog(
     onDismiss: () -> Unit,
     onSelectSource: (MapSourceItem) -> Unit
 ) {
+    val badgePalette = LocalBadgePalette.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("选择地图图层") },
@@ -1938,17 +2009,17 @@ fun MapSourceDialog(
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Surface(
                                         color = if (item.isDomestic)
-                                            androidx.compose.ui.graphics.Color(0xFF2E7D32).copy(alpha = 0.2f)
+                                            badgePalette.directContainer
                                         else
-                                            androidx.compose.ui.graphics.Color(0xFFE65100).copy(alpha = 0.2f),
+                                            badgePalette.proxyContainer,
                                         shape = RoundedCornerShape(4.dp)
                                     ) {
                                         Text(
                                             text = if (item.isDomestic) "国内直连" else "需代理",
                                             color = if (item.isDomestic)
-                                                androidx.compose.ui.graphics.Color(0xFF2E7D32)
+                                                badgePalette.directContent
                                             else
-                                                androidx.compose.ui.graphics.Color(0xFFE65100),
+                                                badgePalette.proxyContent,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
                                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
@@ -2018,7 +2089,7 @@ fun BookmarksDialog(
                 Icon(
                     Icons.Filled.Star,
                     contentDescription = null,
-                    tint = androidx.compose.ui.graphics.Color(0xFFFFB300),
+                    tint = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.size(24.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -2298,8 +2369,16 @@ fun LocationTargetMenuDialog(
                                 shape = RoundedCornerShape(4.dp),
                                 color = if (realLocation != null) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.outlineVariant
                             ) {
+                                // BUG-13 fix: 徽标如实反映当前最佳定位的来源与精度，
+                                // 网络定位 fix 不再冒充 "GPS 已锁定"。
+                                val lockLabel = when {
+                                    realLocation == null -> "等待定位"
+                                    realLocation.provider == android.location.LocationManager.GPS_PROVIDER ->
+                                        if (realLocation.hasAccuracy()) "GPS ±${realLocation.accuracy.toInt()}m" else "GPS 已锁定"
+                                    else -> if (realLocation.hasAccuracy()) "网络 ±${realLocation.accuracy.toInt()}m" else "网络定位"
+                                }
                                 Text(
-                                    text = if (realLocation != null) "GPS 已锁定" else "等待定位",
+                                    text = lockLabel,
                                     style = MaterialTheme.typography.labelSmall,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                     color = if (realLocation != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
@@ -2704,9 +2783,9 @@ fun SearchLocationDialog(
                                             modifier = Modifier.size(30.dp)
                                         ) {
                                             Icon(
-                                                Icons.Filled.Star,
+                                                Icons.Filled.Bookmark,
                                                 contentDescription = "收藏",
-                                                tint = androidx.compose.ui.graphics.Color(0xFFFFB300),
+                                                tint = MaterialTheme.colorScheme.tertiary,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         }

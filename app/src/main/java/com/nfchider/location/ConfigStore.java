@@ -32,6 +32,19 @@ public final class ConfigStore {
 
     private static volatile boolean inited;
     private static volatile SharedPreferences remotePrefs;
+
+    /**
+     * Strong anchor for the remote-preferences listener registered in {@link #init}.
+     *
+     * <p>libxposed's {@code RemotePreferences} keeps listeners in a
+     * {@link java.util.WeakHashMap} (see {@code RemotePreferences} line 34 of
+     * io.github.libxposed:service), so a listener that is not referenced anywhere
+     * else may be garbage-collected at any time. Without this anchor the push
+     * channel silently dies after a GC and config changes made in the module app
+     * never reach hooked processes until they are restarted.
+     */
+    private static SharedPreferences.OnSharedPreferenceChangeListener listenerRef;
+
     private static volatile Context appContext;
     private static volatile TrajectoryConfig cached;
     private static volatile long lastFetchElapsed = Long.MIN_VALUE;
@@ -44,9 +57,11 @@ public final class ConfigStore {
         inited = true;
         try {
             SharedPreferences prefs = api.getRemotePreferences(PREFS_GROUP);
-            prefs.registerOnSharedPreferenceChangeListener((p, key) -> {
-                if (KEY_JSON.equals(key)) readRemoteIntoCache(prefs);
-            });
+            SharedPreferences.OnSharedPreferenceChangeListener l = (p, key) -> {
+                if (KEY_JSON.equals(key)) readRemoteIntoCache(p);
+            };
+            listenerRef = l; // keep a strong reference; RemotePreferences holds listeners weakly
+            prefs.registerOnSharedPreferenceChangeListener(l);
             remotePrefs = prefs;
             readRemoteIntoCache(prefs);
         } catch (Throwable t) {

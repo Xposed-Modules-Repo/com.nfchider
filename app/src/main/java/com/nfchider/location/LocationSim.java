@@ -16,9 +16,11 @@ import android.os.SystemClock;
 import android.util.Log;
 
 import java.lang.reflect.Method;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
@@ -68,16 +70,25 @@ public final class LocationSim {
      * was active. When the simulation is later disabled we re-invoke it so the
      * real {@link LocationManager} finally registers the listener/PendingIntent
      * and real fixes resume.
+     *
+     * <p>BUG-04 fix: this table used to be a {@link ConcurrentHashMap} holding the
+     * listener (key), the {@link LocationManager} (which transitively holds the
+     * target app's {@link Context}) and the original argument array strongly.
+     * Apps that never call {@code removeUpdates} therefore leaked their
+     * Activity/Context for the lifetime of the process. The map is now a
+     * {@link WeakHashMap} and both the key object inside the argument array and
+     * the receiver are held only through {@link WeakReference}s, so an entry
+     * becomes collectable as soon as the app drops its listener.
      */
-    private static final Map<Object, Registration> PENDING = new ConcurrentHashMap<>();
+    private static final Map<Object, Registration> PENDING = new WeakHashMap<>();
 
     private static final class Registration {
-        final Object receiver;
+        final WeakReference<Object> receiverRef;
         final Method method;
         final Object[] args;
 
         Registration(Object receiver, Method method, Object[] args) {
-            this.receiver = receiver;
+            this.receiverRef = new WeakReference<>(receiver);
             this.method = method;
             this.args = args;
         }
@@ -434,10 +445,17 @@ public final class LocationSim {
     /** Capture the original requestLocationUpdates call for later re-registration. */
     private static void storeRegistration(Chain chain, Object key) {
         try {
+            Object[] args = chain.getArgs().toArray();
+            // Hold the registration key weakly inside the captured arguments so
+            // the WeakHashMap entry can actually be collected once the app drops
+            // its listener; otherwise the value would keep the key alive.
+            for (int i = 0; i < args.length; i++) {
+                if (args[i] == key) args[i] = new WeakReference<>(key);
+            }
             PENDING.put(key, new Registration(
                     chain.getThisObject(),
                     (Method) chain.getExecutable(),
-                    chain.getArgs().toArray()));
+                    args));
         } catch (Throwable ignored) {
         }
     }
@@ -446,12 +464,25 @@ public final class LocationSim {
     private static void restoreRealUpdates(Object key) {
         Registration reg = PENDING.remove(key);
         if (reg == null) return;
+        Object receiver = reg.receiverRef.get();
+        if (receiver == null) return; // manager already gone; nothing to restore
         try {
+            Object[] args = new Object[reg.args.length];
+            for (int i = 0; i < reg.args.length; i++) {
+                Object a = reg.args[i];
+                if (a instanceof WeakReference) {
+                    Object resolved = ((WeakReference<?>) a).get();
+                    if (resolved == null) return; // app dropped the listener
+                    args[i] = resolved;
+                } else {
+                    args[i] = a;
+                }
+            }
             // The method is still hooked, but with the simulation now inactive
             // handleLocationManager returns chain.proceed(), which performs the
             // real registration, so real updates start flowing again.
             reg.method.setAccessible(true);
-            reg.method.invoke(reg.receiver, reg.args);
+            reg.method.invoke(receiver, args);
         } catch (Throwable ignored) {
         }
     }

@@ -9,7 +9,6 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
 import android.os.Looper
-import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +67,30 @@ class RealLocationTracker(private val context: Context) {
     private var timerJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Main)
 
+    /**
+     * BUG-13 fix: 录制轨迹时最近一次录入的原始定位。
+     * 轨迹降噪需要比对「新旧 fix 的相对精度」：若新 fix 精度更差且距上一点很近，
+     * 说明它是上一点（更精确的 GPS fix）附近的网络定位抖动，录入会污染轨迹。
+     */
+    private var lastRecordedLocation: Location? = null
+
+    /**
+     * BUG-13 fix: 初始种子定位是否陈旧。陈旧种子（如早上最后一次 GPS 缓存）会让
+     * isBetterLocation 因「新 fix 并非显著更新」而错误拒绝实时 fix，此标记置位时
+     * 首个更新的实时 fix 直接替换种子。
+     */
+    private var seedIsStale = false
+
+    /**
+     * BUG-06 fix: source of truth for recorded waypoints. Fixes used to rebuild
+     * the whole list on every callback ([List.plus]), i.e. O(n^2) allocations
+     * over a long recording. Points are now appended here in O(1) and the
+     * publicly observed snapshot is flushed on a throttle, which also matches
+     * the map redraw cadence.
+     */
+    private val recordedPointsBuffer = ArrayList<TrajectoryConfig.Point>()
+    private var flushPending = false
+
     private val locationListener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
             handleNewLocation(location)
@@ -111,20 +134,36 @@ class RealLocationTracker(private val context: Context) {
         if (_isListening.value) return
 
         // 1. 尝试快速读取最近一次缓存定位
+        //    BUG-13 fix: 原来按 .time 取「最新」缓存，可能选中刚过期的高精度 GPS，
+        //    也可能选中粗精度的网络缓存；改用 isBetterLocation 择优。
+        seedIsStale = false
         var bestLastLocation: Location? = null
         if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
             val loc = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-            if (loc != null) bestLastLocation = loc
+            if (loc != null && isBetterLocation(loc, bestLastLocation)) {
+                bestLastLocation = loc
+            }
         }
         if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
             val loc = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
-            if (loc != null) {
-                if (bestLastLocation == null || loc.time > bestLastLocation.time) {
-                    bestLastLocation = loc
-                }
+            if (loc != null && isBetterLocation(loc, bestLastLocation)) {
+                bestLastLocation = loc
             }
         }
-        bestLastLocation?.let { handleNewLocation(it) }
+        bestLastLocation?.let { cached ->
+            val ageMs = System.currentTimeMillis() - cached.time
+            when {
+                // 超过 10 分钟的缓存定位没有展示价值（可能是昨天/今早的残留），不作为初始估计
+                ageMs > 10 * 60 * 1000L -> return@let
+                // 陈旧缓存（>2 分钟）：仍可作为初始估计，但经典启发式会因「新 fix
+                // 相对陈旧种子并不显著更新」而错误拒绝实时 fix，需标记允许直接替换
+                ageMs > TWO_MINUTES_MS -> {
+                    seedIsStale = true
+                    handleNewLocation(cached)
+                }
+                else -> handleNewLocation(cached)
+            }
+        }
 
         // 2. 注册主动定位监听器（GPS 优先，辅以基站/网络定位）
         try {
@@ -176,10 +215,21 @@ class RealLocationTracker(private val context: Context) {
 
     /**
      * 处理收到的最新定位信息（更新实时位置与轨迹录制过滤采样）
+     *
+     * BUG-13 fix: GPS 与 NETWORK 两个 provider 注册在同一个 listener 上，原来
+     * 每次回调都无条件覆盖 _currentLocation：一次 500m 精度的基站定位会把刚
+     * 锁定的 5m GPS fix 覆盖掉，蓝点（以及「定位到我」「设为模拟点」）随之跳
+     * 到错误位置。现在按经典 isBetterLocation 启发式择优，_currentLocation
+     * 只持有「更新且更准」的 fix。
      */
     private fun handleNewLocation(location: Location) {
-        // 更新当前真实定位
-        _currentLocation.value = location
+        // 更新当前真实定位：仅当新 fix 优于当前最佳（或用于替换陈旧种子）时才覆盖
+        val currentBest = _currentLocation.value
+        val replacesStaleSeed = seedIsStale && currentBest != null && location.time > currentBest.time
+        if (replacesStaleSeed || isBetterLocation(location, currentBest)) {
+            _currentLocation.value = location
+            seedIsStale = false
+        }
 
         if (_recordingState.value != RecordingState.RECORDING) {
             return
@@ -193,8 +243,7 @@ class RealLocationTracker(private val context: Context) {
             return
         }
 
-        val points = _recordedPoints.value
-        val lastPoint = points.lastOrNull()
+        val lastPoint = recordedPointsBuffer.lastOrNull()
         val speed = if (location.hasSpeed()) location.speed.toDouble() else 0.0
         _currentSpeedMps.value = speed
 
@@ -203,7 +252,9 @@ class RealLocationTracker(private val context: Context) {
 
         if (lastPoint == null) {
             // 首个点直接录入
-            _recordedPoints.value = listOf(newPoint)
+            recordedPointsBuffer.add(newPoint)
+            lastRecordedLocation = location
+            scheduleRecordedFlush()
         } else {
             val dist = distanceBetween(lastPoint.lat, lastPoint.lng, newPoint.lat, newPoint.lng)
             // 2. 距离过滤：如果距离上一个航点小于 3 米，且当前几乎处于静止状态，则不重复记录以防原地漂移画圈
@@ -211,8 +262,31 @@ class RealLocationTracker(private val context: Context) {
                 return
             }
 
-            _recordedPoints.value = points + newPoint
+            // 3. BUG-13 fix: 抖动过滤。若新 fix 精度明显差于最近录入的 fix，且距离
+            //    很近（<10m），判定为网络定位对已锁定 GPS 位置的抖动，跳过；
+            //    反之更精确的 fix（或明显移动）予以录入，让轨迹向高精度收敛。
+            val lastRecorded = lastRecordedLocation
+            if (lastRecorded != null && dist < 10.0 && location.hasAccuracy() && lastRecorded.hasAccuracy()) {
+                if (location.accuracy > lastRecorded.accuracy + 5f) {
+                    return
+                }
+            }
+
+            recordedPointsBuffer.add(newPoint)
+            lastRecordedLocation = location
             _recordedDistanceM.value += dist
+            scheduleRecordedFlush()
+        }
+    }
+
+    /** Publishes the recorded-points snapshot at most ~2x per second. */
+    private fun scheduleRecordedFlush() {
+        if (flushPending) return
+        flushPending = true
+        scope.launch {
+            delay(400L)
+            flushPending = false
+            _recordedPoints.value = ArrayList(recordedPointsBuffer)
         }
     }
 
@@ -224,6 +298,8 @@ class RealLocationTracker(private val context: Context) {
      * 开始录制
      */
     fun startRecording() {
+        recordedPointsBuffer.clear()
+        lastRecordedLocation = null
         _recordedPoints.value = emptyList()
         _recordedDistanceM.value = 0.0
         _currentSpeedMps.value = 0.0
@@ -235,7 +311,9 @@ class RealLocationTracker(private val context: Context) {
         _currentLocation.value?.let { loc ->
             if (!loc.hasAccuracy() || loc.accuracy <= 35f) {
                 val ele = if (loc.hasAltitude()) loc.altitude else Double.NaN
-                _recordedPoints.value = listOf(TrajectoryConfig.Point(loc.latitude, loc.longitude, ele))
+                recordedPointsBuffer.add(TrajectoryConfig.Point(loc.latitude, loc.longitude, ele))
+                lastRecordedLocation = loc
+                scheduleRecordedFlush()
             }
         }
     }
@@ -264,7 +342,8 @@ class RealLocationTracker(private val context: Context) {
      * 完成录制，返回所有采集的点，并重置录制状态
      */
     fun finishRecording(): List<TrajectoryConfig.Point> {
-        val result = _recordedPoints.value
+        val result = ArrayList(recordedPointsBuffer)
+        lastRecordedLocation = null
         _recordingState.value = RecordingState.IDLE
         stopTimer()
         return result
@@ -275,6 +354,8 @@ class RealLocationTracker(private val context: Context) {
      */
     fun cancelRecording() {
         _recordingState.value = RecordingState.IDLE
+        recordedPointsBuffer.clear()
+        lastRecordedLocation = null
         _recordedPoints.value = emptyList()
         _recordedDistanceM.value = 0.0
         _currentSpeedMps.value = 0.0
@@ -300,6 +381,56 @@ class RealLocationTracker(private val context: Context) {
     }
 
     companion object {
+        /** 判定「明显更新/明显更旧」的时间阈值（2 分钟），与 Android 官方最佳定位启发式一致 */
+        private const val TWO_MINUTES_MS = 2 * 60 * 1000L
+
+        /** 判定「精度显著变差」的阈值（米） */
+        private const val SIGNIFICANTLY_LESS_ACCURATE_M = 200f
+
+        /**
+         * 经典最佳定位启发式（源自 Android 开发者文档）：
+         * 判定 [newLocation] 是否应取代 [currentBestLocation] 成为当前最佳定位。
+         *
+         * - 无当前定位时，任何新定位都更优；
+         * - 新定位比当前最佳「明显更新」（>2 分钟）：接受（用户很可能已移动）；
+         * - 新定位「明显更旧」（<-2 分钟）：拒绝；
+         * - 精度更高：接受；
+         * - 更新且精度未变差：接受；
+         * - 更新、精度变差但未显著变差且同 provider：接受；
+         * - 其余拒绝。
+         *
+         * 缺精度信息（hasAccuracy=false）按最差精度处理，避免无精度 fix 覆盖精确 fix。
+         */
+        fun isBetterLocation(newLocation: Location, currentBestLocation: Location?): Boolean {
+            if (currentBestLocation == null) return true
+
+            val timeDelta = newLocation.time - currentBestLocation.time
+            val isSignificantlyNewer = timeDelta > TWO_MINUTES_MS
+            val isSignificantlyOlder = timeDelta < -TWO_MINUTES_MS
+            val isNewer = timeDelta > 0
+
+            if (isSignificantlyNewer) {
+                return true
+            } else if (isSignificantlyOlder) {
+                return false
+            }
+
+            val newAccuracy = if (newLocation.hasAccuracy()) newLocation.accuracy else Float.MAX_VALUE
+            val bestAccuracy = if (currentBestLocation.hasAccuracy()) currentBestLocation.accuracy else Float.MAX_VALUE
+            val accuracyDelta = newAccuracy - bestAccuracy
+            val isMoreAccurate = accuracyDelta < 0
+            val isLessAccurate = accuracyDelta > 0
+            val isSignificantlyLessAccurate = accuracyDelta > SIGNIFICANTLY_LESS_ACCURATE_M
+            val isFromSameProvider = newLocation.provider == currentBestLocation.provider
+
+            return when {
+                isMoreAccurate -> true
+                isNewer && !isLessAccurate -> true
+                isNewer && !isSignificantlyLessAccurate && isFromSameProvider -> true
+                else -> false
+            }
+        }
+
         /**
          * 计算两个经纬度之间的球面距离（米）
          */

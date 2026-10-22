@@ -9,7 +9,8 @@ class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        ModuleService.init()
+        // BUG-11 fix: never let service-bridge setup take down app startup.
+        runCatching { ModuleService.init() }
         // Keep osmdroid entirely inside the app's cache dir: no storage
         // permissions needed, tiles simply don't survive a cache wipe.
         Configuration.getInstance().apply {

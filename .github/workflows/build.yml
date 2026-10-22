@@ -8,6 +8,13 @@ permissions:
   contents: write
   actions: write
 
+# 同一分支只允许一个构建实例运行：连续手动触发时排队而非并发，
+# 避免两个实例同时改版本号/建 Release/同步组织仓库造成竞态与标签冲突。
+# cancel-in-progress=false：排队执行，不取消已在跑的构建（发布链路需完整跑完）。
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest

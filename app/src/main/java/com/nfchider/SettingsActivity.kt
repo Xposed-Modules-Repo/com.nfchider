@@ -7,14 +7,23 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -40,7 +49,7 @@ fun MainScreen() {
     val context = LocalContext.current
     var config by remember { mutableStateOf(SimConfigRepository.load(context)) }
 
-    androidx.compose.runtime.LaunchedEffect(Unit) {
+    LaunchedEffect(Unit) {
         config = SimConfigRepository.load(context)
     }
 
@@ -66,7 +75,14 @@ fun MainScreen() {
             GlobalHookSwitchCard(
                 enabled = config.enabled,
                 onToggle = { newEnabled ->
-                    val updated = config.toBuilder().enabled(newEnabled).build()
+                    // BUG-02 fix: re-enabling from this screen must restart the
+                    // trajectory clock, otherwise TrajectoryEngine jumps to the
+                    // position implied by the old startAt (e.g. straight to the
+                    // route end in ONCE mode after the hook was off for a while).
+                    val updated = config.toBuilder()
+                        .enabled(newEnabled)
+                        .startAt(if (newEnabled) System.currentTimeMillis() else config.startAt)
+                        .build()
                     config = updated
                     SimConfigRepository.save(context, updated)
                     Toast.makeText(
@@ -82,6 +98,34 @@ fun MainScreen() {
             TargetAppCard()
             AboutCard()
         }
+    }
+}
+
+/** 卡片标题行：引导图标 + 标题 + 可选尾部徽章。 */
+@Composable
+private fun CardHeader(
+    icon: ImageVector,
+    title: String,
+    trailing: (@Composable () -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f)
+        )
+        trailing?.invoke()
     }
 }
 
@@ -101,11 +145,21 @@ fun GlobalHookSwitchCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Hook 总开关",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Filled.Security,
+                            contentDescription = null,
+                            tint = if (enabled) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Hook 总开关",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = if (enabled) "● 已开启 (已勾选的应用生效中)" else "○ 已关闭 (已暂停所有拦截与模拟)",
@@ -141,11 +195,7 @@ fun ModuleStatusCard() {
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "模块状态",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+            CardHeader(icon = Icons.Filled.Memory, title = "模块状态")
             Spacer(modifier = Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -180,25 +230,26 @@ fun LocationSimCard(config: TrajectoryConfig) {
     val context = LocalContext.current
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "位置模拟与地点收藏",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                if (config.enabled) {
-                    Text(
-                        text = "模拟中",
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold
-                    )
+            CardHeader(
+                icon = Icons.Filled.Map,
+                title = "位置模拟与地点收藏",
+                trailing = {
+                    if (config.enabled) {
+                        Surface(
+                            shape = MaterialTheme.shapes.small,
+                            color = MaterialTheme.colorScheme.primary
+                        ) {
+                            Text(
+                                text = "模拟中",
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
-            }
+            )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "支持 Google 卫星高清图层、地点收藏夹、真实移动轨迹现场录制回放与自定义路线规划。已勾选的应用将自动获取模拟定位。",
@@ -231,11 +282,7 @@ fun LocationSimCard(config: TrajectoryConfig) {
 fun HookCategoriesCard() {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "拦截分类",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+            CardHeader(icon = Icons.Filled.Category, title = "拦截分类")
             Spacer(modifier = Modifier.height(8.dp))
 
             CategoryItem("应用定位查询 (LocationManager)", "拦截该应用内的 GPS/网络/Fused 定位查询与更新")
@@ -271,11 +318,7 @@ private fun CategoryItem(title: String, description: String) {
 fun TargetAppCard() {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "作用域设置指引",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+            CardHeader(icon = Icons.Filled.Apps, title = "作用域设置指引")
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "在 LSPosed 中勾选需要生效的应用",
@@ -297,11 +340,7 @@ fun TargetAppCard() {
 fun AboutCard() {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "关于",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+            CardHeader(icon = Icons.Filled.Info, title = "关于")
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "基于现代 libxposed 的应用级模块。支持对选定应用隐藏 NFC 硬件、Google 卫星混合地图轨迹 GPS 位置模拟、真实物理航迹录制与地点收藏夹功能。",

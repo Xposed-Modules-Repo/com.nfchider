@@ -27,6 +27,10 @@ object ModuleService {
     @Volatile
     private var initialized = false
 
+    // BUG-09 fix: written on the main thread (pushJson) and read on a binder
+    // thread (onServiceBind). Without @Volatile the death/rebind of the
+    // framework service could drop the pending push.
+    @Volatile
     private var pendingJson: String? = null
 
     fun init() {

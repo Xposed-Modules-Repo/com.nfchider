@@ -112,34 +112,39 @@ object LocationSearchService {
             setRequestProperty("User-Agent", USER_AGENT)
             requestMethod = "GET"
         }
-        val code = conn.responseCode
-        if (code != 200) return emptyList()
-        val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-        val root = JSONObject(text)
-        val features = root.optJSONArray("features") ?: return emptyList()
-        val list = mutableListOf<SearchResultPlace>()
-        for (i in 0 until features.length()) {
-            val feat = features.optJSONObject(i) ?: continue
-            val geom = feat.optJSONObject("geometry") ?: continue
-            val coords = geom.optJSONArray("coordinates") ?: continue
-            if (coords.length() < 2) continue
-            val lng = coords.optDouble(0)
-            val lat = coords.optDouble(1)
-            val props = feat.optJSONObject("properties") ?: JSONObject()
-            val name = props.optString("name").takeIf { it.isNotBlank() }
-                ?: props.optString("street").takeIf { it.isNotBlank() }
-                ?: query
-            val parts = listOfNotNull(
-                props.optString("street").takeIf { it.isNotBlank() },
-                props.optString("district").takeIf { it.isNotBlank() },
-                props.optString("city").takeIf { it.isNotBlank() },
-                props.optString("state").takeIf { it.isNotBlank() },
-                props.optString("country").takeIf { it.isNotBlank() }
-            ).distinct()
-            val desc = if (parts.isNotEmpty()) parts.joinToString(" · ") else String.format(Locale.US, "坐标: %.5f, %.5f", lat, lng)
-            list.add(SearchResultPlace(title = name, description = desc, lat = lat, lng = lng, source = "Photon"))
+        try {
+            val code = conn.responseCode
+            if (code != 200) return emptyList()
+            val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val root = JSONObject(text)
+            val features = root.optJSONArray("features") ?: return emptyList()
+            val list = mutableListOf<SearchResultPlace>()
+            for (i in 0 until features.length()) {
+                val feat = features.optJSONObject(i) ?: continue
+                val geom = feat.optJSONObject("geometry") ?: continue
+                val coords = geom.optJSONArray("coordinates") ?: continue
+                if (coords.length() < 2) continue
+                val lng = coords.optDouble(0)
+                val lat = coords.optDouble(1)
+                val props = feat.optJSONObject("properties") ?: JSONObject()
+                val name = props.optString("name").takeIf { it.isNotBlank() }
+                    ?: props.optString("street").takeIf { it.isNotBlank() }
+                    ?: query
+                val parts = listOfNotNull(
+                    props.optString("street").takeIf { it.isNotBlank() },
+                    props.optString("district").takeIf { it.isNotBlank() },
+                    props.optString("city").takeIf { it.isNotBlank() },
+                    props.optString("state").takeIf { it.isNotBlank() },
+                    props.optString("country").takeIf { it.isNotBlank() }
+                ).distinct()
+                val desc = if (parts.isNotEmpty()) parts.joinToString(" · ") else String.format(Locale.US, "坐标: %.5f, %.5f", lat, lng)
+                list.add(SearchResultPlace(title = name, description = desc, lat = lat, lng = lng, source = "Photon"))
+            }
+            return list
+        } finally {
+            // BUG-12 fix: release the underlying socket instead of waiting for GC
+            conn.disconnect()
         }
-        return list
     }
 
     private fun searchNominatim(query: String): List<SearchResultPlace> {
@@ -151,22 +156,27 @@ object LocationSearchService {
             setRequestProperty("User-Agent", USER_AGENT)
             requestMethod = "GET"
         }
-        val code = conn.responseCode
-        if (code != 200) return emptyList()
-        val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-        val array = JSONArray(text)
-        val list = mutableListOf<SearchResultPlace>()
-        for (i in 0 until array.length()) {
-            val item = array.optJSONObject(i) ?: continue
-            val lat = item.optString("lat").toDoubleOrNull() ?: continue
-            val lng = item.optString("lon").toDoubleOrNull() ?: continue
-            val name = item.optString("name").takeIf { it.isNotBlank() }
-                ?: item.optString("display_name").split(",").firstOrNull()?.trim()
-                ?: query
-            val displayName = item.optString("display_name")
-            list.add(SearchResultPlace(title = name, description = displayName, lat = lat, lng = lng, source = "OSM"))
+        try {
+            val code = conn.responseCode
+            if (code != 200) return emptyList()
+            val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val array = JSONArray(text)
+            val list = mutableListOf<SearchResultPlace>()
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val lat = item.optString("lat").toDoubleOrNull() ?: continue
+                val lng = item.optString("lon").toDoubleOrNull() ?: continue
+                val name = item.optString("name").takeIf { it.isNotBlank() }
+                    ?: item.optString("display_name").split(",").firstOrNull()?.trim()
+                    ?: query
+                val displayName = item.optString("display_name")
+                list.add(SearchResultPlace(title = name, description = displayName, lat = lat, lng = lng, source = "OSM"))
+            }
+            return list
+        } finally {
+            // BUG-12 fix: release the underlying socket instead of waiting for GC
+            conn.disconnect()
         }
-        return list
     }
 }
 

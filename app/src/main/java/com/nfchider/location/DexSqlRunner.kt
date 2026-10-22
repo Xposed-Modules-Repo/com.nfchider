@@ -41,8 +41,17 @@ object DexSqlRunner {
         for (name in ASSET_FILES) {
             val out = File(dir, name)
             if (!out.exists()) {
+                // BUG-10 fix: copy to a temp file and rename into place. A plain
+                // copyTo that fails midway (low storage, killed process) used to
+                // leave a truncated file that the exists() check would then
+                // treat as valid forever.
+                val tmp = File(dir, "$name.tmp")
                 assets.open("$ASSET_DIR/$name").use { input ->
-                    out.outputStream().use { output -> input.copyTo(output) }
+                    tmp.outputStream().use { output -> input.copyTo(output) }
+                }
+                if (!tmp.renameTo(out)) {
+                    tmp.copyTo(out, overwrite = true)
+                    tmp.delete()
                 }
             }
             // Only the loader and the dexsql binary need the execute bit.
@@ -220,13 +229,30 @@ object DexSqlRunner {
             val proc = ProcessBuilder(cmd)
                 .redirectErrorStream(true)
                 .start()
-            val output = proc.inputStream.bufferedReader().readText()
+            // BUG-05 fix: drain stdout on a separate thread. Reading the stream
+            // on the calling thread before waitFor() deadlocks once the child
+            // fills the ~64 KiB pipe buffer and then hangs: readText() would
+            // block forever and the timeout below could never be reached,
+            // leaving the query coroutine (and the UI's "running" flag) stuck.
+            val output = StringBuilder()
+            val reader = Thread {
+                try {
+                    proc.inputStream.bufferedReader().forEachLine { line ->
+                        output.append(line).append('\n')
+                    }
+                } catch (_: Throwable) {
+                    // stream closed by destroyForcibly(); keep what we have
+                }
+            }.apply { isDaemon = true; start() }
+
             val finished = proc.waitFor(timeoutSec, TimeUnit.SECONDS)
             if (!finished) {
                 proc.destroyForcibly()
-                output + "\n[dexsql timed out after ${timeoutSec}s]"
+                reader.join(500)
+                output.toString().trimEnd() + "\n[dexsql timed out after ${timeoutSec}s]"
             } else {
-                output
+                reader.join(2000)
+                output.toString().trimEnd()
             }
         } catch (t: Throwable) {
             "[dexsql exec failed] ${t.javaClass.simpleName}: ${t.message}"
