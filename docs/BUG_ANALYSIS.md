@@ -2,7 +2,7 @@
 
 > 分析对象：<https://github.com/furina707/com.nfchider>（main 分支）
 > 模块形态：Android Xposed/LSPosed 模块（libxposed API 102.0.0）——NFC 隐藏 + GPS 位置模拟 + 轨迹录制
-> 分析日期：2026-10-22 ｜ 状态：14 项缺陷全部完成代码修复，`assembleDebug` 构建通过
+> 分析日期：2026-10-22 ｜ 状态：15 项缺陷全部完成代码修复，`assembleDebug` 构建通过
 
 ---
 
@@ -32,7 +32,7 @@
 
 ## 2. 结论总览
 
-共确认并修复 **14 项缺陷**：P0 × 3（核心功能失效）、P1 × 7（内存泄漏/并发/稳定性/定位精度）、P2 × 4（健壮性）。所有修复在源码中以 `// BUG-xx fix:` 注释标注，编号与本报告一一对应。
+共确认并修复 **15 项缺陷**：P0 × 3（核心功能失效）、P1 × 7（内存泄漏/并发/稳定性/定位精度）、P2 × 4（健壮性）。所有修复在源码中以 `// BUG-xx fix:` 注释标注，编号与本报告一一对应。
 
 | # | 位置 | 严重度 | 类别 | 一句话根因 |
 |---|---|---|---|---|
@@ -50,6 +50,7 @@
 | BUG-12 | `location/LocationSearchService.kt` | P2 | 连接泄漏 | HTTP 连接不 `disconnect`，靠 GC 兜底释放 socket |
 | BUG-13 | `location/RealLocationTracker.kt` + `MapActivity.kt` | **P0** | 真实定位不准 | 双 provider 回调无差别覆盖：粗精度基站定位覆盖精确 GPS fix，蓝点跳到错误位置 |
 | BUG-14 | `app/build.gradle.kts` + `module.prop` + CI 工作流 | P2 | 版本号失效 | `versionName` 硬编码 "1.1"，安装界面永远显示「版本: 1.1 -> 1.1」，无法分辨新旧包 |
+| BUG-15 | `location/RealLocationTracker.kt` + `MapActivity.kt` + `ui/QuickFunctionsPanel.kt` | P1 | 定位精度与可视面积 | 室内/静止场景 GPS 多径漂移「蓝点跳舞」；无卫星数与静止状态反馈；底部控制面板长期占据地图可视面积 |
 
 ---
 
@@ -241,6 +242,25 @@
 
 ---
 
+### BUG-15（P1）定位精度不足与底部面板遮挡地图
+
+- **位置**：`app/src/main/java/com/nfchider/location/RealLocationTracker.kt`、`app/src/main/java/com/nfchider/MapActivity.kt`、`app/src/main/java/com/nfchider/ui/QuickFunctionsPanel.kt`、`app/src/main/java/com/nfchider/ui/theme/Color.kt`
+- **现象**（用户实机反馈）：① 蓝点定位「不够精准」——室内或静止时蓝点围绕真实位置跳舞（GPS 多径漂移），运动时相邻 fix 抖动导致轨迹与蓝点锯齿；② 底部控制面板长期占据约 1/4 屏幕高度，地图可视面积被压缩；③ 用户无法感知「为什么定位不准」（卫星数、设备是否静止均无反馈）。
+- **根因**：
+  1. `requestLocationUpdates` 默认 minTime/minDistance 节流可能漏掉关键高精度 fix；GPS 与网络 fix 虽经 BUG-13 择优，但择优通过后**直接采用**单 fix 坐标，相邻 fix 的测量噪声全部暴露在蓝点上；
+  2. 无任何「设备静止」判定：手机放在桌上时，室内多径效应让 GPS 每秒输出数米级漂移，蓝点持续无意义抖动；
+  3. 卫星数与解算状态从未上报，用户看到「±50m」时无从判断是天空视野问题还是信号问题；
+  4. 底部控制面板（速度/模式/启停/录制仪表）为常驻布局，折叠态仍占一条状态栏高度。
+- **修复**（三层定位增强 + 一次布局重构）：
+  1. **provider 隔离**：GPS fix 精度 ≤30m 即记录「GPS 锁」（精度 + 时间戳）；锁定且 30s 内有 fix 期间，网络定位不得覆盖蓝点，除非精度反超锁 20m 以上；GPS 超过 30s 无 fix 自动失锁，网络定位重新参与择优；
+  2. **Kalman-lite 一维加权平滑**：相邻 fix 在合成噪声带（3σ 且 ≥8m）内时按方差倒数加权平均，多 fix 一致即收敛蓝点、显示精度低于任何单 fix（下限 3m，避免过度自信）；超出噪声带判定真实移动，直接跳转不拖尾；
+  3. **加速度计静止检测**：合加速度持续贴近重力（|a|−9.81 < 0.6 m/s²）超过 4 秒判定静止；静止期间冻结显示位置为加权均值，只接纳「精度显著更优（<70%）或移动 >15m」的 fix，杜绝「蓝点跳舞」；重新移动立即解除冻结；
+  4. **GNSS 卫星状态上报**：`GnssStatus.Callback` 统计可见卫星总数与参与解算卫星数，定位菜单徽标展示「GPS ±8m · 6星」，≤3 星参与解算时提示「移动到开阔处可显著提高精度」；
+  5. **精度圈可视化**：按 fix 的 accuracy 半径绘制 48 边形半透明圆环（Polygon overlay），精度收敛过程肉眼可见，半径封顶 400m；
+  6. **移除底部控制面板**：速度/模式/启停迁入「速度」圆唤起的 `SimControlDialog`；暂停/完成/放弃迁入录制控制对话框；面板位置改显顶部 `SimStatusPill` 状态药丸（状态点 + 广播坐标 + 快捷停止）；地图可视面积全部还给用户；
+  7. **透明圆 UI**：快捷功能全部改为无底色透明圆（1.5dp 功能色圆环 + 同色字形，激活态圆环加粗至 2.5dp），不再遮挡底图；新增速度/启停/撤销/清空/导入 5 个功能圆（17 个功能）。
+- **影响**：静止场景蓝点不再跳舞；多 fix 一致时显示精度低于单 fix；卫星数与静止状态让「准/不准」可解释；底部面板移除后地图可视面积增加约 1/4 屏幕高度。
+
 ## 4. 界面设计优化（概要）
 
 完整设计文档见 [`UI_DESIGN.md`](UI_DESIGN.md)。核心结论与改动：
@@ -272,7 +292,7 @@
 
 ## 6. 遗留风险与后续建议
 
-1. **运行时验证缺失**：本次交付止于编译级验证。建议在 LSPosed 环境实机验证 BUG-01（改配置即时生效）、BUG-04（反复开关后内存稳定）、BUG-07（NFC 检测 App 扫描结果为"无 NFC"）、BUG-13（GPS 锁定后蓝点不再被网络定位拉偏、室内场景收敛行为符合预期）、BUG-14（安装界面版本号显示 1.1.14 而非 1.1、桌面图标为新设计的 NFC 波纹图标）。
+1. **运行时验证缺失**：本次交付止于编译级验证。建议在 LSPosed 环境实机验证 BUG-01（改配置即时生效）、BUG-04（反复开关后内存稳定）、BUG-07（NFC 检测 App 扫描结果为"无 NFC"）、BUG-13（GPS 锁定后蓝点不再被网络定位拉偏、室内场景收敛行为符合预期）、BUG-14（安装界面版本号显示 1.1.14 而非 1.1、桌面图标为新设计的 NFC 波纹图标）、BUG-15（静止放置手机时蓝点冻结不跳舞、移动后立即恢复、卫星数与静止提示在定位菜单展示、精度圈随 fix 收敛、底部面板已移除且状态药纶在顶部正常显示）。
 2. **`Chain.getArgs()` 不可变性的后续审计**：`LocationSim` 已按"`toArray()` 拷贝后再改"的正确姿势处理；后续新增 Hook 时应沿用该模式，切勿直接 `getArgs().set(...)`。
 3. **release 构建未验证**：`signingConfigs` 依赖 keystore 环境变量，本地仅构建 debug；release 构建（含签名与混淆）由 GitHub Actions 工作流验证，产物随 Release 发布。
 4. **CI 发布链路加固（已完成）**：自动递增 versionCode 改为双仓库（个人仓库 + `Xposed-Modules-Repo/com.nfchider` 发布镜像）取 max，查询失败输出 warning 而非静默按 0；组织仓库由 CI 全量 rsync 同步代码；工作流增加 `concurrency` 组防止连续手动触发并发竞态；组织仓库缺失的 7-1.1 / 8-1.1 Release 已补发；versionName 改为随 versionCode 联动递增（BUG-14），标签统一为 `versionCode-versionName` 官方格式。

@@ -4,10 +4,16 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.location.GnssStatus
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
+import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -23,6 +29,8 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.sqrt
 
 /**
  * 真实定位与轨迹录制服务管理器
@@ -45,6 +53,34 @@ class RealLocationTracker(private val context: Context) {
 
     private val _isListening = MutableStateFlow(false)
     val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
+
+    // -------------------------------------------------------------------------
+    // 定位增强状态（BUG-15）
+    // -------------------------------------------------------------------------
+    /** GNSS 可见卫星总数（诊断与状态展示用） */
+    private val _satelliteCount = MutableStateFlow(0)
+    val satelliteCount: StateFlow<Int> = _satelliteCount.asStateFlow()
+
+    /** 参与解算的卫星数（usedInFix） */
+    private val _satellitesUsedInFix = MutableStateFlow(0)
+    val satellitesUsedInFix: StateFlow<Int> = _satellitesUsedInFix.asStateFlow()
+
+    /** 设备是否静止（加速度计判定）：静止时冻结蓝点，抑制室内 GPS 漂移跳变 */
+    private val _isStationary = MutableStateFlow(false)
+    val isStationary: StateFlow<Boolean> = _isStationary.asStateFlow()
+
+    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    private var stationarySinceMs = 0L
+
+    /** Kalman-lite 融合状态：平滑经纬度与方差（米²） */
+    private var smoothLat = 0.0
+    private var smoothLng = 0.0
+    private var smoothVar = 0.0
+    private var smoothValid = false
+
+    /** GPS 锁：GPS fix 精度达到门限即锁定，锁定期间网络定位不得覆盖 */
+    private var gpsLockAccuracy: Float? = null
+    private var lastGpsFixAt = 0L
 
     // -------------------------------------------------------------------------
     // 轨迹录制状态
@@ -100,6 +136,49 @@ class RealLocationTracker(private val context: Context) {
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
         override fun onProviderEnabled(provider: String) {}
         override fun onProviderDisabled(provider: String) {}
+    }
+
+    /**
+     * GNSS 卫星状态回调：统计可见卫星与参与解算的卫星数。
+     * 卫星数少（<4 星参与解算）时定位精度必然差，展示给用户可解释
+     * 「为什么定位不准」，并提示移动到开阔处。
+     */
+    private val gnssStatusCallback = object : GnssStatus.Callback() {
+        override fun onSatelliteStatusChanged(status: GnssStatus) {
+            var used = 0
+            val total = status.satelliteCount
+            for (i in 0 until total) {
+                if (status.usedInFix(i)) used++
+            }
+            _satelliteCount.value = total
+            _satellitesUsedInFix.value = used
+        }
+    }
+
+    /**
+     * 加速度计监听（静止检测）：合加速度持续贴近重力加速度（|a|-9.81 < 0.6）
+     * 超过 4 秒判定设备静止。静止期间冻结蓝点显示位置，杜绝室内 GPS 多径
+     * 漂移造成的「蓝点跳舞」；一旦重新移动立即解除冻结。
+     */
+    private val accelerometerListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            val x = event.values[0]
+            val y = event.values[1]
+            val z = event.values[2]
+            val magnitude = sqrt((x * x + y * y + z * z).toDouble())
+            val now = System.currentTimeMillis()
+            if (abs(magnitude - 9.81) < STATIONARY_ACCEL_THRESHOLD) {
+                if (stationarySinceMs == 0L) stationarySinceMs = now
+                if (!_isStationary.value && now - stationarySinceMs >= STATIONARY_HOLD_MS) {
+                    _isStationary.value = true
+                }
+            } else {
+                stationarySinceMs = 0L
+                _isStationary.value = false
+            }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
     }
 
     /**
@@ -166,12 +245,15 @@ class RealLocationTracker(private val context: Context) {
         }
 
         // 2. 注册主动定位监听器（GPS 优先，辅以基站/网络定位）
+        //    GPS 用 minTime=0/minDistance=0：每个 fix 都送入择优与融合层，
+        //    避免系统节流漏掉关键的高精度 fix；网络定位 2s 一次足够（它
+        //    只服务于 GPS 不可用的兜底场景，且锁定 GPS 后会被隔离）。
         try {
             if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
                 locationManager.requestLocationUpdates(
                     LocationManager.GPS_PROVIDER,
-                    1000L,
-                    1.0f,
+                    0L,
+                    0f,
                     locationListener,
                     Looper.getMainLooper()
                 )
@@ -182,13 +264,28 @@ class RealLocationTracker(private val context: Context) {
             if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
                 locationManager.requestLocationUpdates(
                     LocationManager.NETWORK_PROVIDER,
-                    1000L,
-                    1.0f,
+                    2000L,
+                    0f,
                     locationListener,
                     Looper.getMainLooper()
                 )
             }
         } catch (_: SecurityException) {}
+
+        // 3. 注册 GNSS 卫星状态与加速度计（静止检测）监听
+        try {
+            locationManager.registerGnssStatusCallback(gnssStatusCallback, Handler(Looper.getMainLooper()))
+        } catch (_: Exception) {}
+        sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let { sensor ->
+            try {
+                sensorManager.registerListener(accelerometerListener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+            } catch (_: Exception) {}
+        }
+
+        // 4. 重置融合与锁定状态，避免上一轮监听的平滑位置污染新一轮定位
+        smoothValid = false
+        gpsLockAccuracy = null
+        lastGpsFixAt = 0L
 
         _isListening.value = true
     }
@@ -199,6 +296,12 @@ class RealLocationTracker(private val context: Context) {
     fun stopLocationUpdates() {
         try {
             locationManager.removeUpdates(locationListener)
+        } catch (_: Exception) {}
+        try {
+            locationManager.unregisterGnssStatusCallback(gnssStatusCallback)
+        } catch (_: Exception) {}
+        try {
+            sensorManager?.unregisterListener(accelerometerListener)
         } catch (_: Exception) {}
         _isListening.value = false
     }
@@ -221,14 +324,106 @@ class RealLocationTracker(private val context: Context) {
      * 锁定的 5m GPS fix 覆盖掉，蓝点（以及「定位到我」「设为模拟点」）随之跳
      * 到错误位置。现在按经典 isBetterLocation 启发式择优，_currentLocation
      * 只持有「更新且更准」的 fix。
+     *
+     * BUG-15 fix: 在择优之上叠加三层增强，继续压胜定位精度：
+     * 1. provider 隔离——GPS 锁定（精度 ≤30m 且 30s 内有 fix）后，网络定位
+     *    不得覆盖蓝点，除非精度反超 GPS 锁 20m 以上（WiFi 定位偶有惊喜）；
+     * 2. Kalman-lite 融合——相邻 fix 在合成噪声带内时按方差倒数加权平均，
+     *    多 fix 一致即收敛蓝点、压低显示精度；超出噪声带（真实移动）直接
+     *    跳转不拖尾；
+     * 3. 静止冻结——加速度计判定设备静止时冻结显示位置，只接纳显著更优的
+     *    fix，杜绝室内多径漂移的「蓝点跳舞」。
      */
     private fun handleNewLocation(location: Location) {
-        // 更新当前真实定位：仅当新 fix 优于当前最佳（或用于替换陈旧种子）时才覆盖
+        val now = System.currentTimeMillis()
+        val isGps = location.provider == LocationManager.GPS_PROVIDER
+        val fixAccuracy = if (location.hasAccuracy()) location.accuracy else DEFAULT_ACCURACY_M
+
+        // GPS 锁状态跟踪：GPS fix 精度达到门限即视为锁定，记录锁定精度与时间
+        if (isGps && location.hasAccuracy() && location.accuracy <= GPS_LOCK_ACCURACY_M) {
+            gpsLockAccuracy = location.accuracy
+            lastGpsFixAt = now
+        }
+
+        // ---------------------------------------------------------------------
+        // 增强 1：provider 隔离。GPS 已锁定且未陈旧时，网络/基站定位不得
+        // 覆盖蓝点（它通常粗 1-2 个数量级）；GPS 超过 30s 无 fix 视为失锁，
+        // 网络定位重新参与择优。
+        // ---------------------------------------------------------------------
+        if (!isGps) {
+            val lockAcc = gpsLockAccuracy
+            if (lockAcc != null) {
+                if (now - lastGpsFixAt >= GPS_LOCK_STALE_MS) {
+                    gpsLockAccuracy = null
+                } else if (fixAccuracy >= lockAcc - NETWORK_OVERRIDE_MARGIN_M) {
+                    return
+                }
+            }
+        }
+
+        // 择优门控：仅当新 fix 优于当前最佳（或用于替换陈旧种子）时才进入后续处理
         val currentBest = _currentLocation.value
         val replacesStaleSeed = seedIsStale && currentBest != null && location.time > currentBest.time
-        if (replacesStaleSeed || isBetterLocation(location, currentBest)) {
-            _currentLocation.value = location
-            seedIsStale = false
+        if (!(replacesStaleSeed || isBetterLocation(location, currentBest))) {
+            return
+        }
+        seedIsStale = false
+
+        // ---------------------------------------------------------------------
+        // 增强 2 + 3：Kalman-lite 融合与静止冻结，输出平滑后的显示位置
+        // ---------------------------------------------------------------------
+        val sigma2 = (fixAccuracy * fixAccuracy).toDouble()
+        when {
+            // 静止冻结：只接纳显著更优的 fix 或超出静止移动阈值的真实移动
+            _isStationary.value && currentBest != null -> {
+                val dist = if (smoothValid) {
+                    distanceBetween(smoothLat, smoothLng, location.latitude, location.longitude)
+                } else {
+                    0.0
+                }
+                val curAcc = if (currentBest.hasAccuracy()) currentBest.accuracy else DEFAULT_ACCURACY_M
+                val significantlyBetter = location.hasAccuracy() && location.accuracy < curAcc * 0.7f
+                if (significantlyBetter || dist > STATIONARY_MOVE_M) {
+                    smoothLat = location.latitude
+                    smoothLng = location.longitude
+                    smoothVar = sigma2
+                    smoothValid = true
+                    emitSmoothed(location)
+                }
+                // 否则冻结：保持当前显示位置不变
+            }
+
+            // 首个 fix：直接作为平滑状态初值
+            !smoothValid -> {
+                smoothLat = location.latitude
+                smoothLng = location.longitude
+                smoothVar = sigma2
+                smoothValid = true
+                emitSmoothed(location)
+            }
+
+            else -> {
+                val dist = distanceBetween(smoothLat, smoothLng, location.latitude, location.longitude)
+                val combinedSigma = sqrt(smoothVar + sigma2)
+                if (dist > maxOf(SMOOTH_JUMP_SIGMAS * combinedSigma, SMOOTH_JUMP_MIN_M)) {
+                    // 超出合成噪声带：判定为真实移动，直接跳转（不平滑拖尾）
+                    smoothLat = location.latitude
+                    smoothLng = location.longitude
+                    smoothVar = sigma2
+                    smoothValid = true
+                    emitSmoothed(location)
+                } else {
+                    // 噪声带内：按方差倒数加权融合，收敛蓝点并压低显示精度
+                    val invSum = 1.0 / smoothVar + 1.0 / sigma2
+                    val wSmooth = (1.0 / smoothVar) / invSum
+                    val wFix = (1.0 / sigma2) / invSum
+                    smoothLat = smoothLat * wSmooth + location.latitude * wFix
+                    smoothLng = smoothLng * wSmooth + location.longitude * wFix
+                    // 方差下限：宣称精度不低于单 fix 的一半，避免过度自信
+                    smoothVar = maxOf(1.0 / invSum, sigma2 * 0.25)
+                    emitSmoothed(location)
+                }
+            }
         }
 
         if (_recordingState.value != RecordingState.RECORDING) {
@@ -277,6 +472,22 @@ class RealLocationTracker(private val context: Context) {
             _recordedDistanceM.value += dist
             scheduleRecordedFlush()
         }
+    }
+
+    /**
+     * 以平滑后的位置发布当前真实定位。
+     * 保留源 fix 的 provider/time/speed 等属性，仅替换经纬度，
+     * accuracy 取融合后方差（多 fix 一致时低于任何单 fix，体现置信度提升）。
+     */
+    private fun emitSmoothed(source: Location) {
+        val out = Location(source)
+        out.latitude = smoothLat
+        out.longitude = smoothLng
+        if (source.hasAccuracy()) {
+            out.accuracy = sqrt(smoothVar).coerceAtLeast(3.0).toFloat()
+        }
+        _currentLocation.value = out
+        seedIsStale = false
     }
 
     /** Publishes the recorded-points snapshot at most ~2x per second. */
@@ -386,6 +597,36 @@ class RealLocationTracker(private val context: Context) {
 
         /** 判定「精度显著变差」的阈值（米） */
         private const val SIGNIFICANTLY_LESS_ACCURATE_M = 200f
+
+        // ------------------------------------------------------------------
+        // BUG-15 定位增强常量
+        // ------------------------------------------------------------------
+        /** GPS 锁定判定精度（米）：GPS fix 精度优于此值即视为已锁定 */
+        private const val GPS_LOCK_ACCURACY_M = 30f
+
+        /** GPS 锁失保质期（毫秒）：超过此时长没有 GPS fix 视为失锁 */
+        private const val GPS_LOCK_STALE_MS = 30_000L
+
+        /** 网络定位覆盖 GPS 锁所需的精度优势（米） */
+        private const val NETWORK_OVERRIDE_MARGIN_M = 20f
+
+        /** 无精度信息的 fix 的保守默认精度（米） */
+        private const val DEFAULT_ACCURACY_M = 50f
+
+        /** 静止判定：合加速度相对重力的偏差阈值（m/s²） */
+        private const val STATIONARY_ACCEL_THRESHOLD = 0.6
+
+        /** 静止判定保持时长（毫秒） */
+        private const val STATIONARY_HOLD_MS = 4_000L
+
+        /** 静止冻结期间判定「真实移动」的距离阈值（米） */
+        private const val STATIONARY_MOVE_M = 15.0
+
+        /** 平滑跳变判定：超出 N 倍合成标准差视为真实移动 */
+        private const val SMOOTH_JUMP_SIGMAS = 3.0
+
+        /** 平滑跳变判定的最小距离（米），避免高置信态下噪声误触发跳转 */
+        private const val SMOOTH_JUMP_MIN_M = 8.0
 
         /**
          * 经典最佳定位启发式（源自 Android 开发者文档）：

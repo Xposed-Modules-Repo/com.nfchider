@@ -124,6 +124,15 @@ MapPalette.Dark   // 暗底瓦片：路线 #7FB0FF / 录制 #5EFC82 / 收藏 #FF
 - **声明**：`AndroidManifest` 的 `<application>` 增加 `android:icon` / `android:roundIcon`；
 - 生成管线：AI 出图 → PIL 去水印（众数背景色填充）→ 颜色距离 alpha 抠图 → LANCZOS 缩放 → 各密度落盘，圆形遮罩预览逐档验证。
 
+### 3.7 透明圆功能圆与底部面板移除（v1.1.15）
+
+学习 Firefox 新建标签页的快捷方式：每个功能是一个**独立的透明圆**——无底色，功能色圆环 + 同色字形，悬浮在底图之上不遮挡内容；圆下方一个小号标签，共同构成一个功能单元。
+
+- **透明圆**（`QuickFunctionsPanel.FunctionCircle`）：`Modifier.border(1.5dp, 功能色, CircleShape)` + `Icon(tint = 功能色)`，无 `background()`；开关类功能激活态圆环加粗至 2.5dp 并升满不透明度；禁用态圆环与字形同步降至 38% 透明度；圆环自带 `contentDescription`，标签文本从无障碍树隐藏避免朗读重复。
+- **移除底部控制面板**：原常驻底部面板（速度/模式/启停/录制仪表）整体拆除，速度/模式/启停迁入 `SimControlDialog`（「速度」圆唤起），录制控制迁入 `RecordingControlDialog`（录制圆唤起）；面板折叠态的「状态摘要」升级为顶部 `SimStatusPill` 状态药丸——状态点 + 运行状态/实时广播坐标 + 模拟中快捷停止，一行展示，不占用地图底部空间。
+- **定位精度圈**：按 fix 的 accuracy 半径生成 48 边形 `Polygon` overlay（半透明填充 + 细描边），先于蓝点加入 overlays 保证蓝点绘制在精度圈之上；半径封顶 400m，`accuracy < 5m` 时隐藏。
+- **功能色板扩充**：`QuickFunctionColors` 新增 Speed / Undo / Clear / Import 四色，功能圆从 12 个扩至 17 个。
+
 ---
 
 ## 4. 落地清单
@@ -136,3 +145,7 @@ MapPalette.Dark   // 暗底瓦片：路线 #7FB0FF / 录制 #5EFC82 / 收藏 #FF
 - [x] `MapActivity.kt`：FAB 列迁移至快捷功能面板 + 地图覆盖层主题化 + 长按震动 + 真实定位择优（BUG-13）
 - [x] `SettingsActivity.kt`：卡片引导图标与层级统一
 - [x] 应用图标体系：adaptive icon（anydpi-v26 XML + 安全区 foreground）+ 五档 legacy PNG + roundIcon 变体 + manifest 声明
+- [x] `ui/QuickFunctionsPanel.kt`：功能圆改为透明圆（功能色圆环 + 同色字形，无底色）
+- [x] `MapActivity.kt`：移除底部控制面板；新增 SimStatusPill 状态药丸 / SimControlDialog / RecordingControlDialog；新增定位精度圈 overlay；GNSS 卫星数与静止状态展示
+- [x] `location/RealLocationTracker.kt`：provider 隔离 / Kalman-lite 平滑 / 加速度计静止检测 / GNSS 卫星状态上报
+- [x] `ui/theme/Color.kt`：QuickFunctionColors 扩充 Speed / Undo / Clear / Import

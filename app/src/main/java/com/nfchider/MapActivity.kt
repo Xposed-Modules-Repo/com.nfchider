@@ -41,10 +41,13 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.Info
@@ -53,9 +56,12 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
@@ -132,12 +138,16 @@ import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
 import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 class MapActivity : ComponentActivity() {
 
@@ -171,7 +181,9 @@ fun LocationSimScreen() {
     var showMapSourceDialog by remember { mutableStateOf(false) }
     var mapDiagnosticResult by remember { mutableStateOf<MapDiagnostics.DiagnosticResult?>(null) }
     var isMapAlertDismissed by remember { mutableStateOf(false) }
-    var isPanelExpanded by remember { mutableStateOf(true) }
+    // 模拟控制 / 录制控制对话框（取代原底部控制面板，地图可视面积全部还给用户）
+    var showSimControlDialog by remember { mutableStateOf(false) }
+    var showRecordingControlDialog by remember { mutableStateOf(false) }
 
     var bookmarks by remember { mutableStateOf(BookmarkRepository.load(context)) }
     var showBookmarksDialog by remember { mutableStateOf(false) }
@@ -191,6 +203,10 @@ fun LocationSimScreen() {
     val recordedDistanceM by tracker.recordedDistanceM.collectAsState()
     val currentSpeedMps by tracker.currentSpeedMps.collectAsState()
     val recordingDurationSec by tracker.recordingDurationSec.collectAsState()
+    // BUG-15 定位增强状态：卫星数（诊断展示）与设备静止（蓝点冻结）
+    val satelliteCount by tracker.satelliteCount.collectAsState()
+    val satellitesUsedInFix by tracker.satellitesUsedInFix.collectAsState()
+    val isStationary by tracker.isStationary.collectAsState()
 
     var hasCenteredToRealLocation by remember { mutableStateOf(false) }
     // BUG-13 fix: 首个 fix 可能是粗精度网络定位（百米级），直接居中会把地图
@@ -329,9 +345,103 @@ fun LocationSimScreen() {
         }
     }
 
+    // BUG-15 fix: 真实定位精度圈——按 fix 的 accuracy 半径绘制的半透明圆环，
+    // 让「当前定位有多准」肉眼可见（半径随精度收敛而缩小）。先于蓝点加入
+    // overlays，保证蓝点绘制在精度圈之上。
+    val accuracyCircle = remember {
+        Polygon(mapView).apply {
+            fillPaint.color = mapPalette.realLocationHalo.copy(alpha = 0.10f).toArgb()
+            outlinePaint.color = mapPalette.realLocationHalo.copy(alpha = 0.45f).toArgb()
+            outlinePaint.strokeWidth = 2f
+            isEnabled = false
+        }.also { mapView.overlays.add(it) }
+    }
+
+    // 面板与定位二级菜单共用的动作（同一行为两个入口，逻辑只此一份）
+    val locateRealAction: () -> Unit = {
+        if (!tracker.hasLocationPermission()) {
+            permissionLauncher.launch(locationPermissions)
+        } else if (!tracker.isLocationProviderEnabled()) {
+            Toast.makeText(context, "请在手机系统设置中开启定位服务 (GPS)", Toast.LENGTH_LONG).show()
+        } else {
+            val loc = realLocation
+            if (loc != null) {
+                mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
+                if (mapView.zoomLevelDouble < 15.0) {
+                    mapView.controller.setZoom(16.0)
+                }
+                // BUG-15 fix: 提示当前精度，让用户知道定位质量而非只给结论
+                val accText = if (loc.hasAccuracy()) "（当前精度 ±${loc.accuracy.toInt()}m）" else ""
+                Toast.makeText(context, "已定位到真实位置$accText", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "正在获取真实定位，请稍候...", Toast.LENGTH_SHORT).show()
+                tracker.startLocationUpdates()
+            }
+        }
+    }
+    val useRealAsSimAction: () -> Unit = {
+        val loc = realLocation
+        if (loc != null) {
+            update { b ->
+                b.points().clear()
+                b.points().add(TrajectoryConfig.Point(loc.latitude, loc.longitude, Double.NaN))
+                b.enabled(true)
+                b.startAt(System.currentTimeMillis())
+            }
+            mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
+            Toast.makeText(context, "已将真实物理位置设为模拟位置", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "尚未获取到真实定位，无法设为模拟点", Toast.LENGTH_SHORT).show()
+        }
+    }
+    val moveToSimAction: () -> Unit = {
+        val p = simPos
+        val first = config.points.firstOrNull()
+        val targetLat = p?.lat ?: first?.lat
+        val targetLng = p?.lng ?: first?.lng
+        if (targetLat != null && targetLng != null) {
+            mapView.controller.animateTo(GeoPoint(targetLat, targetLng))
+            if (mapView.zoomLevelDouble < 15.0) {
+                mapView.controller.setZoom(16.0)
+            }
+            Toast.makeText(context, "已移动到模拟位置", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "尚未设置模拟位置，请搜索地点或在地图上标记", Toast.LENGTH_SHORT).show()
+        }
+    }
+    val toggleFollowAction: () -> Unit = {
+        follow = !follow
+        if (follow) {
+            val p = simPos
+            val first = config.points.firstOrNull()
+            val targetLat = p?.lat ?: first?.lat
+            val targetLng = p?.lng ?: first?.lng
+            if (targetLat != null && targetLng != null) {
+                mapView.controller.animateTo(GeoPoint(targetLat, targetLng))
+            }
+            Toast.makeText(context, "已开启模拟移动跟随", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "已关闭模拟移动跟随", Toast.LENGTH_SHORT).show()
+        }
+    }
+    val startRecordingAction: () -> Unit = {
+        if (config.enabled) {
+            Toast.makeText(context, "请先停止模拟定位后再录制真实轨迹", Toast.LENGTH_SHORT).show()
+        } else if (!tracker.hasLocationPermission()) {
+            permissionLauncher.launch(locationPermissions)
+        } else if (!tracker.isLocationProviderEnabled()) {
+            Toast.makeText(context, "请在手机系统设置中开启定位服务 (GPS)", Toast.LENGTH_LONG).show()
+        } else {
+            tracker.startRecording()
+            Toast.makeText(context, "开始录制路线，带着手机移动即可", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     LaunchedEffect(mapPalette) {
         routeLine.outlinePaint.color = mapPalette.routeLine.toArgb()
         recordRouteLine.outlinePaint.color = mapPalette.recordLine.toArgb()
+        accuracyCircle.fillPaint.color = mapPalette.realLocationHalo.copy(alpha = 0.10f).toArgb()
+        accuracyCircle.outlinePaint.color = mapPalette.realLocationHalo.copy(alpha = 0.45f).toArgb()
         mapView.invalidate()
     }
 
@@ -376,15 +486,26 @@ fun LocationSimScreen() {
     }
 
     // 收到真实物理定位时：更新我的位置蓝点；初次定位且无模拟点时自动居中到真实位置
-    // BUG-13 fix: 仅当首个 fix 精度足够（<=100m）或宽限时间已到时才居中，
+    // BUG-13 fix: 仅当首个 fix 精度足够（<=50m）或宽限时间已到时才居中，
     // 避免粗精度基站定位把地图锁死在错误位置（GPS 通常随后几秒内收敛）。
+    // BUG-15 fix: 门限由 100m 收紧到 50m、宽限由 10s 放宽到 25s——
+    // 宁可多等一会，也不把地图中心钉在百米级基站定位上。
     LaunchedEffect(realLocation, realLocationCenterGraceElapsed) {
         val loc = realLocation
         if (loc != null) {
             myLocationMarker.isEnabled = true
             myLocationMarker.position = GeoPoint(loc.latitude, loc.longitude)
+            // BUG-15 fix: 按 fix 的 accuracy 绘制精度圈，精度肉眼可见
+            if (loc.hasAccuracy() && loc.accuracy >= 5f) {
+                accuracyCircle.points = accuracyRingPoints(
+                    loc.latitude, loc.longitude, loc.accuracy.coerceAtMost(400f).toDouble()
+                )
+                accuracyCircle.isEnabled = true
+            } else {
+                accuracyCircle.isEnabled = false
+            }
             if (!hasCenteredToRealLocation && config.points.isEmpty()) {
-                val accurateEnough = !loc.hasAccuracy() || loc.accuracy <= 100f
+                val accurateEnough = !loc.hasAccuracy() || loc.accuracy <= 50f
                 if (accurateEnough || realLocationCenterGraceElapsed) {
                     hasCenteredToRealLocation = true
                     mapView.controller.setZoom(15.5)
@@ -393,13 +514,14 @@ fun LocationSimScreen() {
             }
         } else {
             myLocationMarker.isEnabled = false
+            accuracyCircle.isEnabled = false
         }
         mapView.invalidate()
     }
 
-    // 自动居中宽限计时：10 秒后无论当前定位精度如何都按最佳定位居中一次
+    // 自动居中宽限计时：25 秒后无论当前定位精度如何都按最佳定位居中一次
     LaunchedEffect(Unit) {
-        delay(10_000L)
+        delay(25_000L)
         realLocationCenterGraceElapsed = true
     }
 
@@ -526,7 +648,6 @@ fun LocationSimScreen() {
 
     val totalM = TrajectoryEngine.totalDistanceM(config)
     val etaMin = if (config.speedMps > 0) (totalM / config.speedMps / 60).roundToInt() else 0
-    var sliderSpeed by remember(config.speedMps) { mutableStateOf(config.speedMps.toFloat()) }
 
     fun commitSpeed(newSpeed: Double) {
         val now = System.currentTimeMillis()
@@ -548,17 +669,22 @@ fun LocationSimScreen() {
             AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 
             // --------------------------------------------------------------
-            // 地图瓦片加载异常警告与一键修复浮条
+            // 顶部浮层区：瓦片异常警告 + 模拟/录制状态药丸
+            // （原底部控制面板已移除，地图可视面积全部还给用户；
+            //  右侧留白随「快捷功能」面板开合变化，避免互相遮挡）
             // --------------------------------------------------------------
-            if (mapDiagnosticResult?.isDisplayAbnormal == true && !isMapAlertDismissed) {
-                Card(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        // 右侧留白随「快捷功能」面板开合变化，避免互相遮挡
-                        .padding(top = 12.dp, start = 12.dp, end = if (quickPanelOpen) 272.dp else 76.dp)
-                        .fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = 12.dp, start = 12.dp, end = if (quickPanelOpen) 272.dp else 76.dp)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (mapDiagnosticResult?.isDisplayAbnormal == true && !isMapAlertDismissed) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.95f)
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
@@ -645,6 +771,40 @@ fun LocationSimScreen() {
                 }
             }
 
+                // 模拟/录制状态药丸：替代原底部面板的折叠态，一行展示
+                // 运行状态 + 广播坐标 + 快捷停止（模拟中）或进入控制
+                // （录制中/已停止）。模拟运行、录制中或已布点时显示。
+                if (config.enabled || recordingState != RealLocationTracker.RecordingState.IDLE || config.points.isNotEmpty()) {
+                    val pillStatusColor = when {
+                        recordingState != RealLocationTracker.RecordingState.IDLE ->
+                            if (recordingState == RealLocationTracker.RecordingState.RECORDING)
+                                mapPalette.statusRecording
+                            else mapPalette.statusPaused
+                        config.enabled -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    SimStatusPill(
+                        config = config,
+                        simPos = simPos,
+                        totalM = totalM,
+                        etaMin = etaMin,
+                        recordingState = recordingState,
+                        recordedPoints = recordedPoints,
+                        currentSpeedMps = currentSpeedMps,
+                        statusColor = pillStatusColor,
+                        onClick = {
+                            if (recordingState != RealLocationTracker.RecordingState.IDLE) {
+                                showRecordingControlDialog = true
+                            } else {
+                                showSimControlDialog = true
+                            }
+                        },
+                        onStopSim = { update { it.enabled(false) } },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
             if (config.points.isEmpty() && recordingState == RealLocationTracker.RecordingState.IDLE) {
                 Surface(
                     modifier = Modifier
@@ -654,7 +814,7 @@ fun LocationSimScreen() {
                     color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.85f)
                 ) {
                     Text(
-                        text = "右上角「快捷功能」面板：圆形按钮直达定位/搜索/收藏/录制；\n开启「标记」点击地图添加点，长按地图或点「⭐」收藏地点；下方可现场「录制轨迹」。",
+                        text = "右上角「快捷功能」面板：透明圆形按钮直达定位/搜索/启停；\n「速度」圆可调节模拟速度与播放模式；开启「标记」点击地图添加点，长按地图收藏地点。",
                         modifier = Modifier.padding(14.dp),
                         color = MaterialTheme.colorScheme.inverseOnSurface,
                         fontSize = 13.sp,
@@ -669,83 +829,6 @@ fun LocationSimScreen() {
             // 竖向空间；「显示全部」收纳诊断/标记等次要功能。
             // --------------------------------------------------------------
 
-            // 面板与定位二级菜单共用的动作（同一行为两个入口，逻辑只此一份）
-            val locateRealAction: () -> Unit = {
-                if (!tracker.hasLocationPermission()) {
-                    permissionLauncher.launch(locationPermissions)
-                } else if (!tracker.isLocationProviderEnabled()) {
-                    Toast.makeText(context, "请在手机系统设置中开启定位服务 (GPS)", Toast.LENGTH_LONG).show()
-                } else {
-                    val loc = realLocation
-                    if (loc != null) {
-                        mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
-                        if (mapView.zoomLevelDouble < 15.0) {
-                            mapView.controller.setZoom(16.0)
-                        }
-                        Toast.makeText(context, "已定位到当前真实物理位置", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, "正在获取真实定位，请稍候...", Toast.LENGTH_SHORT).show()
-                        tracker.startLocationUpdates()
-                    }
-                }
-            }
-            val useRealAsSimAction: () -> Unit = {
-                val loc = realLocation
-                if (loc != null) {
-                    update { b ->
-                        b.points().clear()
-                        b.points().add(TrajectoryConfig.Point(loc.latitude, loc.longitude, Double.NaN))
-                        b.enabled(true)
-                        b.startAt(System.currentTimeMillis())
-                    }
-                    mapView.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
-                    Toast.makeText(context, "已将真实物理位置设为模拟位置", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "尚未获取到真实定位，无法设为模拟点", Toast.LENGTH_SHORT).show()
-                }
-            }
-            val moveToSimAction: () -> Unit = {
-                val p = simPos
-                val first = config.points.firstOrNull()
-                val targetLat = p?.lat ?: first?.lat
-                val targetLng = p?.lng ?: first?.lng
-                if (targetLat != null && targetLng != null) {
-                    mapView.controller.animateTo(GeoPoint(targetLat, targetLng))
-                    if (mapView.zoomLevelDouble < 15.0) {
-                        mapView.controller.setZoom(16.0)
-                    }
-                    Toast.makeText(context, "已移动到模拟位置", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "尚未设置模拟位置，请搜索地点或在地图上标记", Toast.LENGTH_SHORT).show()
-                }
-            }
-            val toggleFollowAction: () -> Unit = {
-                follow = !follow
-                if (follow) {
-                    val p = simPos
-                    val first = config.points.firstOrNull()
-                    val targetLat = p?.lat ?: first?.lat
-                    val targetLng = p?.lng ?: first?.lng
-                    if (targetLat != null && targetLng != null) {
-                        mapView.controller.animateTo(GeoPoint(targetLat, targetLng))
-                    }
-                    Toast.makeText(context, "已开启模拟移动跟随", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "已关闭模拟移动跟随", Toast.LENGTH_SHORT).show()
-                }
-            }
-            val startRecordingAction: () -> Unit = {
-                if (config.enabled) {
-                    Toast.makeText(context, "请先停止模拟定位后再录制真实轨迹", Toast.LENGTH_SHORT).show()
-                } else if (!tracker.hasLocationPermission()) {
-                    permissionLauncher.launch(locationPermissions)
-                } else if (!tracker.isLocationProviderEnabled()) {
-                    Toast.makeText(context, "请在手机系统设置中开启定位服务 (GPS)", Toast.LENGTH_LONG).show()
-                } else {
-                    tracker.startRecording()
-                    Toast.makeText(context, "开始录制路线，带着手机移动即可", Toast.LENGTH_SHORT).show()
-                }
-            }
 
             QuickFunctionsPanel(
                 functions = listOf(
@@ -771,11 +854,32 @@ fun LocationSimScreen() {
                         Icons.Filled.Navigation, "跟随", QuickFunctionColors.Follow,
                         active = follow
                     ) { toggleFollowAction() },
+                    // 模拟启停（原底部面板主操作）：图标随状态切换，激活态=运行中
+                    QuickFunction(
+                        if (config.enabled) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                        "启停", QuickFunctionColors.Sim,
+                        active = config.enabled
+                    ) {
+                        if (config.enabled) {
+                            update { it.enabled(false) }
+                        } else if (config.points.isNotEmpty()) {
+                            update { it.enabled(true).startAt(System.currentTimeMillis()) }
+                        } else {
+                            Toast.makeText(context, "请先添加路线点（标记 / 搜索 / 导入 GPX）", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    // 模拟控制（原底部面板展开区）：速度 / 预设 / 播放模式 / 启停
+                    QuickFunction(Icons.Filled.Speed, "速度", QuickFunctionColors.Speed) {
+                        showSimControlDialog = true
+                    },
+                    // 录制：未录制时开始录制；录制中点击打开录制控制（暂停/完成/放弃）
                     QuickFunction(
                         Icons.Filled.FiberManualRecord, "录制", QuickFunctionColors.Record,
-                        active = recordingState == RealLocationTracker.RecordingState.RECORDING,
-                        enabled = recordingState == RealLocationTracker.RecordingState.IDLE
-                    ) { startRecordingAction() },
+                        active = recordingState == RealLocationTracker.RecordingState.RECORDING
+                    ) {
+                        if (recordingState == RealLocationTracker.RecordingState.IDLE) startRecordingAction()
+                        else showRecordingControlDialog = true
+                    },
                     QuickFunction(Icons.Filled.HealthAndSafety, "诊断", QuickFunctionColors.Diagnose) {
                         showDiagnosticDialog = true
                     },
@@ -789,6 +893,28 @@ fun LocationSimScreen() {
                     },
                     QuickFunction(Icons.Filled.GpsFixed, "真迹设点", QuickFunctionColors.RealAsSim) {
                         useRealAsSimAction()
+                    },
+                    // 以下为原底部面板编辑操作，迁移至此
+                    QuickFunction(
+                        Icons.Filled.Undo, "撤销", QuickFunctionColors.Undo,
+                        enabled = config.points.isNotEmpty() && !config.enabled
+                    ) {
+                        update { b ->
+                            if (b.points().isNotEmpty()) b.points().removeAt(b.points().size - 1)
+                        }
+                    },
+                    QuickFunction(
+                        Icons.Filled.DeleteSweep, "清空", QuickFunctionColors.Clear,
+                        enabled = config.points.isNotEmpty()
+                    ) {
+                        update { b ->
+                            b.points().clear()
+                            b.enabled(false)
+                        }
+                        Toast.makeText(context, "已清空路线", Toast.LENGTH_SHORT).show()
+                    },
+                    QuickFunction(Icons.Filled.FolderOpen, "导入", QuickFunctionColors.Import) {
+                        gpxLauncher.launch(arrayOf("*/*"))
                     }
                 ),
                 open = quickPanelOpen,
@@ -800,531 +926,55 @@ fun LocationSimScreen() {
                     .padding(12.dp)
             )
 
-            // --------------------------------------------------------------
-            // 底部控制面板（模拟控制 / 实时轨迹录制控制）
-            // --------------------------------------------------------------
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth(),
-                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                shadowElevation = 8.dp
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .animateContentSize()
-                ) {
-                    // 顶部拖动/切换把手
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { isPanelExpanded = !isPanelExpanded }
-                            .padding(top = 8.dp, bottom = 4.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Surface(
-                            modifier = Modifier
-                                .width(36.dp)
-                                .height(4.dp),
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
-                        ) {}
-                    }
-
-                    if (!isPanelExpanded) {
-                        // ==================================================
-                        // 极简折叠状态（大幅腾出地图可视范围，避免挡住路线与标记）
-                        // ==================================================
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 16.dp, end = 12.dp, top = 2.dp, bottom = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable { isPanelExpanded = true }
-                            ) {
-                                Surface(
-                                    modifier = Modifier.size(9.dp),
-                                    shape = CircleShape,
-                                    color = when {
-                                        recordingState != RealLocationTracker.RecordingState.IDLE ->
-                                            if (recordingState == RealLocationTracker.RecordingState.RECORDING)
-                                                mapPalette.statusRecording
-                                            else mapPalette.statusPaused
-                                        config.enabled -> MaterialTheme.colorScheme.primary
-                                        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                    }
-                                ) {}
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = when {
-                                            recordingState != RealLocationTracker.RecordingState.IDLE ->
-                                                "轨迹录制中 (${recordedPoints.size} 点 · ${(currentSpeedMps * 3.6).roundToInt()} km/h)"
-                                            config.enabled ->
-                                                "模拟运行中 · ${(config.speedMps * 3.6).roundToInt()} km/h"
-                                            else ->
-                                                "模拟已停止 (${config.points.size} 点)"
-                                        },
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (config.enabled || recordingState != RealLocationTracker.RecordingState.IDLE)
-                                            MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onSurface
-                                    )
-                                    val subText = if (config.enabled && simPos != null) {
-                                        "广播: ${String.format(Locale.US, "%.5f, %.5f", simPos!!.lat, simPos!!.lng)}"
-                                    } else if (config.points.isNotEmpty()) {
-                                        "${config.points.size} 点 · ${formatDistance(totalM)} · 约 ${etaMin} 分钟"
-                                    } else {
-                                        "点击展开面板添加点或导入轨迹"
-                                    }
-                                    Text(
-                                        text = subText,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1
-                                    )
-                                }
-                            }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                if (recordingState == RealLocationTracker.RecordingState.IDLE) {
-                                    if (config.enabled) {
-                                        Button(
-                                            onClick = { update { it.enabled(false) } },
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                                            modifier = Modifier.height(30.dp)
-                                        ) {
-                                            Text("停止", fontSize = 12.sp)
-                                        }
-                                    } else {
-                                        Button(
-                                            onClick = { update { it.enabled(true).startAt(System.currentTimeMillis()) } },
-                                            enabled = config.points.isNotEmpty(),
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                                            modifier = Modifier.height(30.dp)
-                                        ) {
-                                            Text("开始", fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                                OutlinedButton(
-                                    onClick = { isPanelExpanded = true },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.height(30.dp)
-                                ) {
-                                    Text("展开 ▲", fontSize = 11.sp)
-                                }
-                            }
-                        }
-                    } else {
-                        // ==================================================
-                        // 展开完整操作面板
-                        // ==================================================
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            if (recordingState != RealLocationTracker.RecordingState.IDLE) {
-                                // ======================================================
-                                // 轨迹录制中操作面板
-                                // ======================================================
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Surface(
-                                            modifier = Modifier.size(10.dp),
-                                            shape = CircleShape,
-                                            color = if (recordingState == RealLocationTracker.RecordingState.RECORDING) mapPalette.statusRecording else mapPalette.statusPaused
-                                        ) {}
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = if (recordingState == RealLocationTracker.RecordingState.RECORDING) "正在录制真实轨迹..." else "录制已暂停",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (recordingState == RealLocationTracker.RecordingState.RECORDING) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = "用时 ${recordingDurationSec / 60}分${recordingDurationSec % 60}秒",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        TextButton(
-                                            onClick = { isPanelExpanded = false },
-                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp),
-                                            modifier = Modifier.height(26.dp)
-                                        ) {
-                                            Text("收起 ▼", fontSize = 11.sp)
-                                        }
-                                    }
-                                }
-
-                        // 录制实时数据仪表
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp, horizontal = 12.dp),
-                                horizontalArrangement = Arrangement.SpaceAround,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("采集航点", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text("${recordedPoints.size}", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                }
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("记录里程", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(formatDistance(recordedDistanceM), fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                }
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("实时时速", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text("${(currentSpeedMps * 3.6).roundToInt()} km/h", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                }
-                            }
-                        }
-
-                        // 录制按钮控制组
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            if (recordingState == RealLocationTracker.RecordingState.RECORDING) {
-                                OutlinedButton(
-                                    onClick = { tracker.pauseRecording() },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("暂停录制")
-                                }
-                            } else {
-                                OutlinedButton(
-                                    onClick = { tracker.resumeRecording() },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("继续录制")
-                                }
-                            }
-
-                            Button(
-                                onClick = {
-                                    val pts = tracker.finishRecording()
-                                    if (pts.size < 2) {
-                                        Toast.makeText(context, "采集航点少于 2 个，未生成有效轨迹", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        completedTrackPoints = pts
-                                        showRecordingFinishDialog = true
-                                    }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                modifier = Modifier.weight(1.2f)
-                            ) {
-                                Text("完成录制")
-                            }
-
-                            TextButton(
-                                onClick = { showCancelRecordingConfirm = true }
-                            ) {
-                                Text("放弃", color = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    } else {
-                        // ======================================================
-                        // 普通模拟状态面板
-                        // ======================================================
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = if (config.enabled) "模拟运行中" else "未运行",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (config.enabled) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "${config.points.size} 个点 · ${formatDistance(totalM)} · 单程约 ${etaMin} 分钟",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = if (channelBound) "配置通道：远程偏好" else "配置通道：文件兜底",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                TextButton(
-                                    onClick = { isPanelExpanded = false },
-                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 1.dp),
-                                    modifier = Modifier.height(26.dp)
-                                ) {
-                                    Text("收起 ▼", fontSize = 11.sp)
-                                }
-                            }
-                        }
-
-                        // 模拟运行状态与广播实时查看条
-                        val report = diagnosticReport
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { showDiagnosticDialog = true },
-                            shape = RoundedCornerShape(8.dp),
-                            color = when (report.status) {
-                                LocationSelfTest.TestStatus.BROADCASTING -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
-                                LocationSelfTest.TestStatus.ROUTE_NOT_READY -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f)
-                                LocationSelfTest.TestStatus.SIM_DISABLED -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)
-                            }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = when (report.status) {
-                                        LocationSelfTest.TestStatus.BROADCASTING -> Icons.Filled.CheckCircle
-                                        LocationSelfTest.TestStatus.ROUTE_NOT_READY -> Icons.Filled.Warning
-                                        LocationSelfTest.TestStatus.SIM_DISABLED -> Icons.Filled.Info
-                                    },
-                                    contentDescription = null,
-                                    tint = when (report.status) {
-                                        LocationSelfTest.TestStatus.BROADCASTING -> MaterialTheme.colorScheme.primary
-                                        LocationSelfTest.TestStatus.ROUTE_NOT_READY -> MaterialTheme.colorScheme.secondary
-                                        LocationSelfTest.TestStatus.SIM_DISABLED -> MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "模拟状态：${report.summaryText}",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    val liveText = if (config.enabled && simPos != null) {
-                                        "广播中: ${String.format(Locale.US, "%.5f, %.5f", simPos!!.lat, simPos!!.lng)} | ${String.format(Locale.US, "%.1f", simPos!!.speedMps)} m/s"
-                                    } else {
-                                        report.detailText
-                                    }
-                                    Text(
-                                        text = liveText,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "查看详情 >",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-
-                        // 速度控制
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Filled.Speed,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(text = "速度", style = MaterialTheme.typography.labelMedium)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Slider(
-                                value = sliderSpeed,
-                                onValueChange = { sliderSpeed = it },
-                                onValueChangeFinished = { commitSpeed(sliderSpeed.toDouble()) },
-                                valueRange = 0.3f..90f,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "${(config.speedMps * 3.6).roundToInt()} km/h",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        // 速度预设
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf("步行" to 5, "骑行" to 15, "驾车" to 40, "高铁" to 300).forEach { (label, kmh) ->
-                                FilterChip(
-                                    selected = (config.speedMps * 3.6).roundToInt() == kmh,
-                                    onClick = { commitSpeed(kmh / 3.6) },
-                                    label = { Text("$label $kmh") }
-                                )
-                            }
-                        }
-
-                        // 播放模式
-                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                            val modes = listOf(
-                                TrajectoryConfig.MODE_LOOP to "循环",
-                                TrajectoryConfig.MODE_PINGPONG to "往返",
-                                TrajectoryConfig.MODE_ONCE to "单次"
-                            )
-                            modes.forEachIndexed { index, (mode, label) ->
-                                SegmentedButton(
-                                    selected = config.mode == mode,
-                                    onClick = { update { it.mode(mode) } },
-                                    shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size)
-                                ) {
-                                    Text(label)
-                                }
-                            }
-                        }
-
-                        // 编辑操作与录制入口
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            FilterChip(
-                                selected = markMode,
-                                onClick = { markMode = !markMode },
-                                enabled = !config.enabled,
-                                label = { Text(if (markMode) "标记 开" else "标记 关") },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Filled.LocationOn, contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            )
-                            AssistChip(
-                                onClick = {
-                                    update { b ->
-                                        if (b.points().isNotEmpty()) b.points().removeAt(b.points().size - 1)
-                                    }
-                                },
-                                enabled = config.points.isNotEmpty() && !config.enabled,
-                                label = { Text("撤销") }
-                            )
-                            AssistChip(
-                                onClick = { update { b -> b.points().clear(); b.enabled(false) } },
-                                enabled = config.points.isNotEmpty(),
-                                label = { Text("清空") },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Filled.Clear, contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            )
-                            AssistChip(
-                                onClick = { showSearchLocationDialog = true },
-                                label = { Text("搜点") },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Filled.Search, contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            )
-
-                            // 录制真实轨迹按钮
-                            Button(
-                                onClick = {
-                                    if (config.enabled) {
-                                        Toast.makeText(context, "请先停止模拟定位后再录制真实轨迹", Toast.LENGTH_SHORT).show()
-                                    } else if (!tracker.hasLocationPermission()) {
-                                        permissionLauncher.launch(locationPermissions)
-                                    } else if (!tracker.isLocationProviderEnabled()) {
-                                        Toast.makeText(context, "请在手机系统设置中开启定位服务 (GPS)", Toast.LENGTH_LONG).show()
-                                    } else {
-                                        tracker.startRecording()
-                                        Toast.makeText(context, "开始录制路线，带着手机移动即可", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
-                                shape = RoundedCornerShape(8.dp),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                            ) {
-                                Surface(
-                                    modifier = Modifier.size(8.dp),
-                                    shape = CircleShape,
-                                    color = mapPalette.statusRecording
-                                ) {}
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("录制轨迹", fontSize = 12.sp)
-                            }
-
-                            Spacer(modifier = Modifier.weight(1f))
-                            OutlinedButton(onClick = { gpxLauncher.launch(arrayOf("*/*")) }) {
-                                Text("导入 GPX")
-                            }
-                        }
-
-                        // 模拟启动 / 停止
-                        if (config.enabled) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                OutlinedButton(
-                                    onClick = { update { it.startAt(System.currentTimeMillis()) } },
-                                    modifier = Modifier.weight(1f)
-                                ) { Text("重新开始") }
-                                Button(
-                                    onClick = { update { it.enabled(false) } },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.error
-                                    ),
-                                    modifier = Modifier.weight(1f)
-                                ) { Text("停止模拟") }
-                            }
-                        } else {
-                            Button(
-                                onClick = { update { it.enabled(true).startAt(System.currentTimeMillis()) } },
-                                enabled = config.points.isNotEmpty(),
-                                modifier = Modifier.fillMaxWidth()
-                            ) { Text("开始模拟") }
-                        }
-
-                        Text(
-                            text = "提示：需在 LSPosed 勾选目标应用并重启目标应用；录制真实轨迹可一键转为模拟路线。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
         }
     }
+
+            // --------------------------------------------------------------
+            // 模拟控制对话框（原底部面板展开区的速度/模式/启停，整体迁至于此）
+            // --------------------------------------------------------------
+            if (showSimControlDialog) {
+                SimControlDialog(
+                    config = config,
+                    totalM = totalM,
+                    etaMin = etaMin,
+                    onDismiss = { showSimControlDialog = false },
+                    onCommitSpeed = { commitSpeed(it) },
+                    onChangeMode = { mode -> update { it.mode(mode) } },
+                    onStart = { update { it.enabled(true).startAt(System.currentTimeMillis()) } },
+                    onStop = { update { it.enabled(false) } },
+                    onRestart = { update { it.startAt(System.currentTimeMillis()) } }
+                )
+            }
+
+            // --------------------------------------------------------------
+            // 录制控制对话框（原底部面板展开区的录制仪表与暂停/完成/放弃）
+            // --------------------------------------------------------------
+            if (showRecordingControlDialog) {
+                RecordingControlDialog(
+                    recordingState = recordingState,
+                    recordedPoints = recordedPoints,
+                    recordedDistanceM = recordedDistanceM,
+                    currentSpeedMps = currentSpeedMps,
+                    recordingDurationSec = recordingDurationSec,
+                    onDismiss = { showRecordingControlDialog = false },
+                    onPause = { tracker.pauseRecording() },
+                    onResume = { tracker.resumeRecording() },
+                    onFinish = {
+                        val pts = tracker.finishRecording()
+                        if (pts.size < 2) {
+                            Toast.makeText(context, "采集航点少于 2 个，未生成有效轨迹", Toast.LENGTH_SHORT).show()
+                        } else {
+                            completedTrackPoints = pts
+                            showRecordingControlDialog = false
+                            showRecordingFinishDialog = true
+                        }
+                    },
+                    onCancel = {
+                        showRecordingControlDialog = false
+                        showCancelRecordingConfirm = true
+                    }
+                )
+            }
 
             // --------------------------------------------------------------
             // 录制完成操作对话框
@@ -1552,6 +1202,9 @@ fun LocationSimScreen() {
                     isFollowing = follow,
                     hasLocationPermission = tracker.hasLocationPermission(),
                     isProviderEnabled = tracker.isLocationProviderEnabled(),
+                    satelliteCount = satelliteCount,
+                    satellitesUsedInFix = satellitesUsedInFix,
+                    isStationary = isStationary,
                     onDismiss = { showLocationMenuDialog = false },
                     // 与「快捷功能」面板共用同一批动作（定义见面板处），避免两套逻辑漂移
                     onLocateReal = locateRealAction,
@@ -1611,8 +1264,6 @@ fun LocationSimScreen() {
                 )
             }
         }
-    }
-}
 
 /**
  * 动态纯代码生成高品质定位蓝点 Drawable（带半透明光晕与核心）
@@ -1640,6 +1291,337 @@ private fun createMyLocationDrawable(context: Context, palette: MapPalette): Dra
     canvas.drawCircle(center, center, radius * 0.45f, paint)
 
     return BitmapDrawable(context.resources, bitmap)
+}
+/**
+ * 模拟/录制状态药丸（取代原底部控制面板的折叠态）。
+ *
+ * 一行展示：状态点 + 运行状态/广播坐标 + 快捷操作（模拟中点按停止；
+ * 录制中/已停止时点按打开对应控制对话框）。半透明深色药丸压在顶部
+ * 浮层区，不占用地图底部空间。
+ */
+@Composable
+private fun SimStatusPill(
+    config: TrajectoryConfig,
+    simPos: TrajectoryEngine.Position?,
+    totalM: Double,
+    etaMin: Int,
+    recordingState: RealLocationTracker.RecordingState,
+    recordedPoints: List<TrajectoryConfig.Point>,
+    currentSpeedMps: Double,
+    statusColor: androidx.compose.ui.graphics.Color,
+    onClick: () -> Unit,
+    onStopSim: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.88f),
+        tonalElevation = 4.dp,
+        shadowElevation = 6.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .clickable { onClick() }
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                modifier = Modifier.size(9.dp),
+                shape = CircleShape,
+                color = statusColor
+            ) {}
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = when {
+                        recordingState != RealLocationTracker.RecordingState.IDLE ->
+                            "轨迹录制中 (${recordedPoints.size} 点 · ${(currentSpeedMps * 3.6).roundToInt()} km/h)"
+                        config.enabled ->
+                            "模拟运行中 · ${(config.speedMps * 3.6).roundToInt()} km/h"
+                        else ->
+                            "模拟已停止 (${config.points.size} 点)"
+                    },
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
+                    maxLines = 1
+                )
+                Text(
+                    text = when {
+                        recordingState != RealLocationTracker.RecordingState.IDLE ->
+                            "点按打开录制控制（暂停 / 完成 / 放弃）"
+                        config.enabled && simPos != null ->
+                            "广播: ${String.format(Locale.US, "%.5f, %.5f", simPos.lat, simPos.lng)}"
+                        config.points.isNotEmpty() ->
+                            "${config.points.size} 点 · ${formatDistance(totalM)} · 约 ${etaMin} 分钟 · 点按调节速度"
+                        else ->
+                            "点按打开模拟控制"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.75f),
+                    maxLines = 1
+                )
+            }
+            if (recordingState == RealLocationTracker.RecordingState.IDLE && config.enabled) {
+                TextButton(
+                    onClick = onStopSim,
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    ),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    modifier = Modifier.height(30.dp)
+                ) {
+                    Text("停止", fontSize = 12.sp)
+                }
+            } else {
+                Icon(
+                    imageVector = Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 模拟控制对话框（原底部面板展开区的速度/预设/模式/启停整体迁至于此）：
+ * 路线摘要 + 速度滑块与预设 + 播放模式分段按钮 + 开始/停止/重新开始。
+ */
+@Composable
+private fun SimControlDialog(
+    config: TrajectoryConfig,
+    totalM: Double,
+    etaMin: Int,
+    onDismiss: () -> Unit,
+    onCommitSpeed: (Double) -> Unit,
+    onChangeMode: (String) -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onRestart: () -> Unit
+) {
+    var sliderSpeed by remember(config.speedMps) { mutableStateOf(config.speedMps.toFloat()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.Speed,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("模拟控制", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "${config.points.size} 个点 · ${formatDistance(totalM)} · 单程约 ${etaMin} 分钟",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // 速度控制
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.Speed,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = "速度", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Slider(
+                        value = sliderSpeed,
+                        onValueChange = { sliderSpeed = it },
+                        onValueChangeFinished = { onCommitSpeed(sliderSpeed.toDouble()) },
+                        valueRange = 0.3f..90f,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "${(config.speedMps * 3.6).roundToInt()} km/h",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // 速度预设
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("步行" to 5, "骑行" to 15, "驾车" to 40, "高铁" to 300).forEach { (label, kmh) ->
+                        FilterChip(
+                            selected = (config.speedMps * 3.6).roundToInt() == kmh,
+                            onClick = { onCommitSpeed(kmh / 3.6) },
+                            label = { Text("$label $kmh") }
+                        )
+                    }
+                }
+
+                // 播放模式
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    val modes = listOf(
+                        TrajectoryConfig.MODE_LOOP to "循环",
+                        TrajectoryConfig.MODE_PINGPONG to "往返",
+                        TrajectoryConfig.MODE_ONCE to "单次"
+                    )
+                    modes.forEachIndexed { index, (mode, label) ->
+                        SegmentedButton(
+                            selected = config.mode == mode,
+                            onClick = { onChangeMode(mode) },
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size)
+                        ) {
+                            Text(label)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (config.enabled) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onRestart) { Text("重新开始") }
+                    Button(
+                        onClick = onStop,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) { Text("停止模拟") }
+                }
+            } else {
+                Button(
+                    onClick = onStart,
+                    enabled = config.points.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("开始模拟") }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+    )
+}
+
+/**
+ * 录制控制对话框（原底部面板展开区的录制仪表与暂停/完成/放弃）：
+ * 录制状态与用时 + 采集航点/里程/时速仪表 + 暂停或继续 + 完成录制 + 放弃。
+ */
+@Composable
+private fun RecordingControlDialog(
+    recordingState: RealLocationTracker.RecordingState,
+    recordedPoints: List<TrajectoryConfig.Point>,
+    recordedDistanceM: Double,
+    currentSpeedMps: Double,
+    recordingDurationSec: Long,
+    onDismiss: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onFinish: () -> Unit,
+    onCancel: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    modifier = Modifier.size(10.dp),
+                    shape = CircleShape,
+                    color = if (recordingState == RealLocationTracker.RecordingState.RECORDING)
+                        MaterialTheme.colorScheme.error
+                    else
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                ) {}
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (recordingState == RealLocationTracker.RecordingState.RECORDING) "正在录制真实轨迹"
+                    else "录制已暂停",
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = "用时 ${recordingDurationSec / 60}分${recordingDurationSec % 60}秒",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // 录制实时数据仪表
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp, horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceAround,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("采集航点", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("${recordedPoints.size}", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("记录里程", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(formatDistance(recordedDistanceM), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("实时时速", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("${(currentSpeedMps * 3.6).roundToInt()} km/h", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        }
+                    }
+                }
+
+                Text(
+                    text = "带着手机移动即可采集真实轨迹；完成后可一键应用为模拟轨迹或导出 GPX。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (recordingState == RealLocationTracker.RecordingState.RECORDING) {
+                    OutlinedButton(onClick = onPause) { Text("暂停录制") }
+                } else {
+                    OutlinedButton(onClick = onResume) { Text("继续录制") }
+                }
+                Button(onClick = onFinish) { Text("完成录制") }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onCancel,
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) { Text("放弃") }
+        }
+    )
+}
+
+/**
+ * 生成定位精度圈的圆周点（[radiusM] 米半径的 48 边形，近似圆）。
+ * 纬度方向 1° ≈ 111.32km，经度方向按纬度余弦收缩。
+ */
+private fun accuracyRingPoints(lat: Double, lng: Double, radiusM: Double, segments: Int = 48): List<GeoPoint> {
+    val dLat = radiusM / 111320.0
+    val dLng = radiusM / (111320.0 * cos(Math.toRadians(lat)))
+    return (0 until segments).map { i ->
+        val theta = 2.0 * PI * i / segments
+        GeoPoint(lat + dLat * sin(theta), lng + dLng * cos(theta))
+    }
 }
 
 /**
@@ -2352,6 +2334,9 @@ fun LocationTargetMenuDialog(
     isFollowing: Boolean,
     hasLocationPermission: Boolean,
     isProviderEnabled: Boolean,
+    satelliteCount: Int,
+    satellitesUsedInFix: Int,
+    isStationary: Boolean,
     onDismiss: () -> Unit,
     onLocateReal: () -> Unit,
     onUseRealAsSim: () -> Unit,
@@ -2411,10 +2396,18 @@ fun LocationTargetMenuDialog(
                             ) {
                                 // BUG-13 fix: 徽标如实反映当前最佳定位的来源与精度，
                                 // 网络定位 fix 不再冒充 "GPS 已锁定"。
+                                // BUG-15 fix: GPS 徽标附带参与解算的卫星数（<4 星
+                                // 参与解算时精度必然差，提示用户移动到开阔处）。
                                 val lockLabel = when {
                                     realLocation == null -> "等待定位"
                                     realLocation.provider == android.location.LocationManager.GPS_PROVIDER ->
-                                        if (realLocation.hasAccuracy()) "GPS ±${realLocation.accuracy.toInt()}m" else "GPS 已锁定"
+                                        buildString {
+                                            append(
+                                                if (realLocation.hasAccuracy()) "GPS ±${realLocation.accuracy.toInt()}m"
+                                                else "GPS 已锁定"
+                                            )
+                                            if (satellitesUsedInFix > 0) append(" · ${satellitesUsedInFix}星")
+                                        }
                                     else -> if (realLocation.hasAccuracy()) "网络 ±${realLocation.accuracy.toInt()}m" else "网络定位"
                                 }
                                 Text(
@@ -2431,11 +2424,22 @@ fun LocationTargetMenuDialog(
                         val realStatusText = when {
                             !hasLocationPermission -> "尚未获取手机定位权限，点击下方按钮申请"
                             !isProviderEnabled -> "手机系统定位服务 (GPS) 未开启"
-                            realLocation != null -> String.format(
-                                Locale.US,
-                                "真实坐标: %.5f, %.5f · 精度约 %.0f 米",
-                                realLocation.latitude, realLocation.longitude, realLocation.accuracy
-                            )
+                            realLocation != null -> buildString {
+                                append(
+                                    String.format(
+                                        Locale.US,
+                                        "真实坐标: %.5f, %.5f · 精度约 %.0f 米",
+                                        realLocation.latitude, realLocation.longitude, realLocation.accuracy
+                                    )
+                                )
+                                if (satelliteCount > 0) {
+                                    append(" · 可见 ${satelliteCount} 星 / ${satellitesUsedInFix} 星参与解算")
+                                }
+                                if (satellitesUsedInFix in 1..3) {
+                                    append("\n参与解算卫星过少，移动到开阔处可显著提高精度")
+                                }
+                                if (isStationary) append("\n设备静止中 · 位置已冻结稳定")
+                            }
                             else -> "正在搜索 GPS 卫星信号，请稍候..."
                         }
                         Text(
