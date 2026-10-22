@@ -97,22 +97,43 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Bumping version: ${CURRENT_CODE}/${VERSION} -> ${NEW_CODE}/${NEW_VERSION_NAME} (tag: ${TAG})"
 
-          # 更新所有版本文件（versionCode 与 versionName 同步递增）
+          # 更新所有版本文件（versionCode 与 versionName 同步递增）。
+          # build.gradle.kts 的两条替换用正则匹配任意旧值，不再依赖 CURRENT_CODE 精确相等：
+          # 曾因 module.prop(15) 与 build.gradle.kts(16) 历史错位，按旧值替换未命中，
+          # versionCode 停留在 16 而标签已是 17，APK 名与标签不一致导致 Release 无附件。
+          # 正则替换对任意历史状态都生效，从根本上消除该类错位。
           sed -i "s/^versionCode=.*/versionCode=${NEW_CODE}/" module.prop
           sed -i "s/^version=.*/version=${NEW_VERSION_NAME}/" module.prop
           sed -i "s/^versionCode=.*/versionCode=${NEW_CODE}/" app/src/main/resources/META-INF/xposed/module.prop
           sed -i "s/^version=.*/version=${NEW_VERSION_NAME}/" app/src/main/resources/META-INF/xposed/module.prop
-          sed -i "s/versionCode = ${CURRENT_CODE}/versionCode = ${NEW_CODE}/" app/build.gradle.kts
-          sed -i "s/versionName = \".*\"/versionName = \"${NEW_VERSION_NAME}\"/" app/build.gradle.kts
+          sed -i -E "s/^([[:space:]]*)versionCode[[:space:]]*=[[:space:]]*[0-9]+/\1versionCode = ${NEW_CODE}/" app/build.gradle.kts
+          sed -i -E "s/^([[:space:]]*)versionName[[:space:]]*=[[:space:]]*\"[^\"]*\"/\1versionName = \"${NEW_VERSION_NAME}\"/" app/build.gradle.kts
+
+          # 自检：三个版本文件都必须递增到新值，任一不满足立即失败（set -e），
+          # 把「静默产出无 APK 的 Release」转换为构建期显式报错。
+          grep -q "versionCode = ${NEW_CODE}" app/build.gradle.kts
+          grep -q "versionName = \"${NEW_VERSION_NAME}\"" app/build.gradle.kts
+          grep -q "^versionCode=${NEW_CODE}" module.prop
+          grep -q "^version=${NEW_VERSION_NAME}" module.prop
+          grep -q "^versionCode=${NEW_CODE}" app/src/main/resources/META-INF/xposed/module.prop
+          grep -q "^version=${NEW_VERSION_NAME}" app/src/main/resources/META-INF/xposed/module.prop
 
       - name: Build Release APK
         run: |
           ./gradlew assembleRelease --no-daemon
 
       - name: Collect APK
+        env:
+          TAG: ${{ steps.get_version.outputs.tag }}
         run: |
+          set -e
           mkdir -p artifacts
-          cp app/build/outputs/apk/release/NfcHider-*.apk artifacts/
+          # 统一落成与 Release 标签一致的文件名：即使产物命名与标签错位
+          # （如版本文件不同步导致 APK 名为 16-1.1.17 而标签为 17-1.1.17），
+          # 也在这里显式归一；glob 命中多个文件时 cp 直接报错，不会静默出错。
+          cp app/build/outputs/apk/release/NfcHider-*.apk "artifacts/NfcHider-${TAG}.apk"
+          ls -la artifacts/
+          test -s "artifacts/NfcHider-${TAG}.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -212,5 +233,6 @@ jobs:
             --data-binary @"${APK}" \
             -o /dev/null
           echo "已同步到 Xposed-Modules-Repo: ${TAG}"
+
 
 
