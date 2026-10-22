@@ -114,6 +114,16 @@ MapPalette.Dark   // 暗底瓦片：路线 #7FB0FF / 录制 #5EFC82 / 收藏 #FF
 - 标题层级：卡片标题 `titleMedium` + 描述 `bodySmall`，统一 16dp 内边距。
 - 总开关卡片：开启时 primaryContainer + 状态徽章；关闭时 surfaceVariant。
 
+### 3.6 应用图标（Launcher Icon）
+
+原应用无图标资源，桌面显示系统默认机器人图标、安装界面无辨识度。本版从零建立完整图标体系：
+
+- **设计**：深蓝底（`#184387`，与品牌「隐匿蓝」同族）+ 白色 NFC 波纹符号（两道同心弧 + 波点），语义即「NFC 隐藏」；
+- **adaptive icon**（`mipmap-anydpi-v26`）：`<background>` 用 `@color/ic_launcher_background` 纯色，`<foreground>` 为 `drawable-*/ic_launcher_foreground.png`（蓝底抠透明，符号缩放 0.889 后置入 72dp 安全区，任何厂商遮罩不裁切符号）；
+- **legacy 全出血 PNG**（`mipmap-mdpi~xxxhdpi`）：48/72/96/144/192px 五档，蓝底白符号满幅；`ic_launcher_round` 为同图案椭圆裁切圆变体；
+- **声明**：`AndroidManifest` 的 `<application>` 增加 `android:icon` / `android:roundIcon`；
+- 生成管线：AI 出图 → PIL 去水印（众数背景色填充）→ 颜色距离 alpha 抠图 → LANCZOS 缩放 → 各密度落盘，圆形遮罩预览逐档验证。
+
 ---
 
 ## 4. 落地清单
@@ -125,3 +135,4 @@ MapPalette.Dark   // 暗底瓦片：路线 #7FB0FF / 录制 #5EFC82 / 收藏 #FF
 - [x] `ui/QuickFunctionsPanel.kt`：Firefox 快捷方式风格功能面板（独立圆形 + 标签 + 4 列网格 + 显示全部）
 - [x] `MapActivity.kt`：FAB 列迁移至快捷功能面板 + 地图覆盖层主题化 + 长按震动 + 真实定位择优（BUG-13）
 - [x] `SettingsActivity.kt`：卡片引导图标与层级统一
+- [x] 应用图标体系：adaptive icon（anydpi-v26 XML + 安全区 foreground）+ 五档 legacy PNG + roundIcon 变体 + manifest 声明

@@ -42,8 +42,10 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # 自动递增 versionCode：查询最新 Release 标签，取 max(最新release+1, 当前+1)，
+      # 自动递增版本号：查询最新 Release 标签，取 max(最新release+1, 当前+1)，
       # 避免手动忘记改版本号导致 Release 标签冲突/覆盖。
+      # versionCode 与 versionName 联动递增：versionName = 主.次.新versionCode，
+      # 修复 versionName 曾硬编码 "1.1" 导致安装界面永远显示「版本: 1.1 -> 1.1」的问题。
       # 个人仓库与组织仓库（发布镜像）都查询并取更大值：组织仓库的版本号同样有效；
       # 任一仓库查询失败时输出 warning 而非静默按 0 计算——曾因静默回退重复占用
       # 已存在的标签，而 softprops 对已存在标签是「更新」而非「新建」，
@@ -82,16 +84,26 @@ jobs:
             NEW_CODE=$((CURRENT_CODE + 1))
           fi
 
-          TAG="${NEW_CODE}-${VERSION}"
-          echo "versionCode=${NEW_CODE}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Bumping versionCode: ${CURRENT_CODE} -> ${NEW_CODE} (tag: ${TAG})"
+          # versionName 联动递增：主.次版本号沿用当前值（如 1.1），修订号 = 新 versionCode。
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          NEW_VERSION_NAME="${MAJOR_MINOR}.${NEW_CODE}"
 
-          # 更新所有版本文件
+          # 标签格式：versionCode-versionName，与 Xposed-Modules-Repo 官方规范一致；
+          # 同时必须与 APK 文件名 NfcHider-${versionCode}-${versionName}.apk
+          # （archivesName）保持一致，否则 softprops 收集不到附件、Release 无 APK。
+          TAG="${NEW_CODE}-${NEW_VERSION_NAME}"
+          echo "versionCode=${NEW_CODE}" >> "$GITHUB_OUTPUT"
+          echo "version=${NEW_VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Bumping version: ${CURRENT_CODE}/${VERSION} -> ${NEW_CODE}/${NEW_VERSION_NAME} (tag: ${TAG})"
+
+          # 更新所有版本文件（versionCode 与 versionName 同步递增）
           sed -i "s/^versionCode=.*/versionCode=${NEW_CODE}/" module.prop
+          sed -i "s/^version=.*/version=${NEW_VERSION_NAME}/" module.prop
           sed -i "s/^versionCode=.*/versionCode=${NEW_CODE}/" app/src/main/resources/META-INF/xposed/module.prop
+          sed -i "s/^version=.*/version=${NEW_VERSION_NAME}/" app/src/main/resources/META-INF/xposed/module.prop
           sed -i "s/versionCode = ${CURRENT_CODE}/versionCode = ${NEW_CODE}/" app/build.gradle.kts
+          sed -i "s/versionName = \".*\"/versionName = \"${NEW_VERSION_NAME}\"/" app/build.gradle.kts
 
       - name: Build Release APK
         run: |

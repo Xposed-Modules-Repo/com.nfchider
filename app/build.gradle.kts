@@ -11,8 +11,8 @@ android {
         applicationId = "com.nfchider"
         minSdk = 29
         targetSdk = 37
-        versionCode = 13
-        versionName = "1.1"
+        versionCode = 14
+        versionName = "1.1.14"
     }
 
     androidResources {

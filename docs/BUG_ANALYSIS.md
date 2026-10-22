@@ -2,7 +2,7 @@
 
 > 分析对象：<https://github.com/furina707/com.nfchider>（main 分支）
 > 模块形态：Android Xposed/LSPosed 模块（libxposed API 102.0.0）——NFC 隐藏 + GPS 位置模拟 + 轨迹录制
-> 分析日期：2026-10-22 ｜ 状态：12 项缺陷全部完成代码修复，`assembleDebug` 构建通过
+> 分析日期：2026-10-22 ｜ 状态：14 项缺陷全部完成代码修复，`assembleDebug` 构建通过
 
 ---
 
@@ -32,7 +32,7 @@
 
 ## 2. 结论总览
 
-共确认并修复 **13 项缺陷**：P0 × 3（核心功能失效）、P1 × 7（内存泄漏/并发/稳定性/定位精度）、P2 × 3（健壮性）。所有修复在源码中以 `// BUG-xx fix:` 注释标注，编号与本报告一一对应。
+共确认并修复 **14 项缺陷**：P0 × 3（核心功能失效）、P1 × 7（内存泄漏/并发/稳定性/定位精度）、P2 × 4（健壮性）。所有修复在源码中以 `// BUG-xx fix:` 注释标注，编号与本报告一一对应。
 
 | # | 位置 | 严重度 | 类别 | 一句话根因 |
 |---|---|---|---|---|
@@ -49,6 +49,7 @@
 | BUG-11 | `App.kt` | P2 | 启动崩溃 | `ModuleService.init()` 未防护，桥接失败拖垮 App 启动 |
 | BUG-12 | `location/LocationSearchService.kt` | P2 | 连接泄漏 | HTTP 连接不 `disconnect`，靠 GC 兜底释放 socket |
 | BUG-13 | `location/RealLocationTracker.kt` + `MapActivity.kt` | **P0** | 真实定位不准 | 双 provider 回调无差别覆盖：粗精度基站定位覆盖精确 GPS fix，蓝点跳到错误位置 |
+| BUG-14 | `app/build.gradle.kts` + `module.prop` + CI 工作流 | P2 | 版本号失效 | `versionName` 硬编码 "1.1"，安装界面永远显示「版本: 1.1 -> 1.1」，无法分辨新旧包 |
 
 ---
 
@@ -223,6 +224,21 @@
   5. 底部面板状态徽标如实反映定位来源与精度（"GPS ±8m" / "网络 ±120m"），不再一律显示"GPS 已锁定"。
 - **影响**：修复前只要网络定位回调晚于 GPS fix 到达即发生位置回跳，室内/窗边等 GPS 不稳定场景几乎必现；修复后蓝点单调收敛到当前可获的最佳精度。
 
+### BUG-14（P2）versionName 硬编码 "1.1"：安装界面版本号永远不变
+
+- **位置**：`app/build.gradle.kts`、`module.prop`、`app/src/main/resources/META-INF/xposed/module.prop`、`.github/workflows/build.yml`
+- **现象**（用户实机反馈）：系统安装界面显示「版本: 1.1 -> 1.1」——versionCode 已递增到 13，versionName 却始终是初版的 "1.1"，用户无法从版本号分辨装的是否为新包。
+- **根因**：
+  1. `versionName = "1.1"` 是**硬编码字符串**，CI 的 Auto-bump 步骤只 sed 更新 `versionCode`，从不触碰 `versionName`；
+  2. `module.prop`（Xposed 管理器读取的版本）同样停留在 `version=1.1`，LSPosed 模块列表显示的版本也与实际构建脱节；
+  3. 标签格式为 `${versionCode}-${version}`，与 Xposed-Modules-Repo 官方 `versionCode-versionName` 规范不一致。
+- **修复**：
+  1. 三个版本文件同步更新为 `1.1.13`（versionCode 13 对应 revision 13，语义自洽）；
+  2. CI Auto-bump 增加 versionName 联动递增：`NEW_VERSION_NAME = 主.次.NEW_CODE`（如 `1.1.14`），并对 `module.prop` ×2、`build.gradle.kts` 补 `version=` / `versionName=` 的 sed；
+  3. 标签格式统一为 `${NEW_CODE}-${NEW_VERSION_NAME}`（如 `14-1.1.14`），与 APK 文件名 `NfcHider-${versionCode}-${versionName}.apk`（archivesName）严格一致，保证 softprops 能收集到 APK 附件；
+  4. 已用临时目录完整模拟 Auto-bump 全流程验证：`1.1.13/13` → `1.1.14/14`，tag `14-1.1.14`，三个文件 sed 结果全部正确。
+- **影响**：修复前每次发布 versionName 均停留在 "1.1"；修复后 versionName 随 versionCode 自动递增，安装界面、LSPosed 模块列表、Release 标签三处版本信息一致且自更新。
+
 ---
 
 ## 4. 界面设计优化（概要）
@@ -246,6 +262,8 @@
 |---|---|
 | `./gradlew assembleDebug`（Gradle 9.4.1 / AGP 9.2.0 / JDK 25 / compileSdk 37） | **BUILD SUCCESSFUL** |
 | `./gradlew :app:compileDebugKotlin`（BUG-13 修复后复验） | **BUILD SUCCESSFUL** |
+| `./gradlew :app:processDebugResources`（BUG-14 修复 + 应用图标资源纳入后复验） | **BUILD SUCCESSFUL** |
+| Auto-bump 工作流模拟（versionName 联动递增） | 通过：`1.1.13/13` → `1.1.14/14`，tag `14-1.1.14`，三版本文件 sed 结果正确 |
 | Kotlin 编译（Compose 编译器） | 通过（修复过程中额外发现并修正 3 处 Compose 作用域回归：前向引用、内联 `apply` 自引用、`remember` 内调用 `@Composable`） |
 | Java 编译 | 通过（补充 `java.lang.ref.WeakReference` import） |
 | 产物 | `app/build/outputs/apk/debug/NfcHider-9-1.1-debug.apk`（62.9 MB，debug 未压缩） |
@@ -254,7 +272,7 @@
 
 ## 6. 遗留风险与后续建议
 
-1. **运行时验证缺失**：本次交付止于编译级验证。建议在 LSPosed 环境实机验证 BUG-01（改配置即时生效）、BUG-04（反复开关后内存稳定）、BUG-07（NFC 检测 App 扫描结果为"无 NFC"）、BUG-13（GPS 锁定后蓝点不再被网络定位拉偏、室内场景收敛行为符合预期）。
+1. **运行时验证缺失**：本次交付止于编译级验证。建议在 LSPosed 环境实机验证 BUG-01（改配置即时生效）、BUG-04（反复开关后内存稳定）、BUG-07（NFC 检测 App 扫描结果为"无 NFC"）、BUG-13（GPS 锁定后蓝点不再被网络定位拉偏、室内场景收敛行为符合预期）、BUG-14（安装界面版本号显示 1.1.14 而非 1.1、桌面图标为新设计的 NFC 波纹图标）。
 2. **`Chain.getArgs()` 不可变性的后续审计**：`LocationSim` 已按"`toArray()` 拷贝后再改"的正确姿势处理；后续新增 Hook 时应沿用该模式，切勿直接 `getArgs().set(...)`。
 3. **release 构建未验证**：`signingConfigs` 依赖 keystore 环境变量，本地仅构建 debug；release 构建（含签名与混淆）由 GitHub Actions 工作流验证，产物随 Release 发布。
-4. **CI 发布链路加固（已完成）**：自动递增 versionCode 改为双仓库（个人仓库 + `Xposed-Modules-Repo/com.nfchider` 发布镜像）取 max，查询失败输出 warning 而非静默按 0；组织仓库由 CI 全量 rsync 同步代码；工作流增加 `concurrency` 组防止连续手动触发并发竞态；组织仓库缺失的 7-1.1 / 8-1.1 Release 已补发。
+4. **CI 发布链路加固（已完成）**：自动递增 versionCode 改为双仓库（个人仓库 + `Xposed-Modules-Repo/com.nfchider` 发布镜像）取 max，查询失败输出 warning 而非静默按 0；组织仓库由 CI 全量 rsync 同步代码；工作流增加 `concurrency` 组防止连续手动触发并发竞态；组织仓库缺失的 7-1.1 / 8-1.1 Release 已补发；versionName 改为随 versionCode 联动递增（BUG-14），标签统一为 `versionCode-versionName` 官方格式。

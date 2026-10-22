@@ -1,3 +1,13 @@
+### NFC Hider 14-1.1
+
+1. **版本号显示修正（重要）**：
+   - 修复安装界面永远显示「版本: 1.1 -> 1.1」的问题：versionName 不再硬编码，改为随 versionCode 联动递增（如 14 → 1.1.14）；
+   - Release 标签统一为 Xposed 官方 `versionCode-versionName` 格式（如 `14-1.1.14`），与 APK 文件名、LSPosed 模块列表三处版本信息一致。
+2. **全新应用图标**：
+   - 从无到有设计启动图标：深蓝底色 + 白色 NFC 波纹符号，与应用「隐匿蓝」品牌色一致；
+   - 完整图标体系：adaptive icon（Android 8+，108dp 画布 / 72dp 安全区）+ 全出血 legacy PNG（mdpi~xxxhdpi）+ 圆形 roundIcon 变体，各密度均经圆形遮罩预览验证无裁切。
+3. 沿袭 13-1.1 的全部功能（Firefox 风格「快捷功能」面板）与 12 项缺陷修复。
+
 ### NFC Hider 13-1.1
 
 1. **「快捷功能」面板（全新交互）**：

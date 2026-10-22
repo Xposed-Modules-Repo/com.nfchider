@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 启动图标背景：隐匿蓝（与品牌主色一致，取自生成图标的主导背景色） -->
+    <color name="ic_launcher_background">#184387</color>
+</resources>
