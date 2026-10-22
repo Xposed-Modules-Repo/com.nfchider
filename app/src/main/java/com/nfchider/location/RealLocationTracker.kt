@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -161,6 +162,16 @@ class RealLocationTracker(private val context: Context) {
             locationManager.removeUpdates(locationListener)
         } catch (_: Exception) {}
         _isListening.value = false
+    }
+
+    /**
+     * 释放资源：取消协程作用域并停止定位监听与录制计时器。
+     * 应在宿主(Activity/Composable)销毁时调用，避免协程与监听器泄漏。
+     */
+    fun release() {
+        stopLocationUpdates()
+        stopTimer()
+        scope.cancel()
     }
 
     /**

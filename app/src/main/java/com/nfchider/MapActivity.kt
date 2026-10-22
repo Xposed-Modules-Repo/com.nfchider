@@ -208,7 +208,7 @@ fun LocationSimScreen() {
 
     DisposableEffect(Unit) {
         onDispose {
-            tracker.stopLocationUpdates()
+            tracker.release()
         }
     }
 
@@ -334,7 +334,10 @@ fun LocationSimScreen() {
 
     DisposableEffect(Unit) {
         mapView.onResume()
-        onDispose { mapView.onPause() }
+        onDispose {
+            mapView.onPause()
+            mapView.onDetach()
+        }
     }
 
     // 收到真实物理定位时：更新我的位置蓝点；初次定位且无模拟点时自动居中到真实位置
@@ -1858,7 +1861,7 @@ fun DiagnosticDialog(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "1. 模块已切换为全局系统 Hook 模式，在 LSPosed 作用域中勾选「系统框架 (android)」即可全局生效，无需勾选各个单独 App！\n2. 在 App 内关闭开关即可立即关闭 Hook，开启即可重新生效，无需重启！\n3. 本 App 自身未被 Hook，因此在 App 内始终可获取真实定位并录制真实轨迹。",
+                                    text = "1. 请在 LSPosed 作用域中勾选需要生效的目标 App（可勾选多个），重启目标 App 后对其生效。\n2. 在 App 内关闭开关即可立即关闭 Hook（NFC 与定位模拟同时停止），开启即可重新生效，无需重启！\n3. 若把本 App 自身也加入作用域，App 内也会收到模拟定位，可能影响真实轨迹录制。",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

@@ -1,10 +1,7 @@
 name: Build
 
 on:
-  push:
-    branches:
-      - main
-      - master
+  # 仅手动触发构建，避免每次推送代码都创建新版本
   workflow_dispatch:
 
 permissions:
@@ -38,17 +35,60 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      # 自动递增 versionCode：查询最新 Release 标签，取 max(最新release+1, 当前+1)，
+      # 避免手动忘记改版本号导致 Release 标签冲突/覆盖。
+      # 个人仓库与组织仓库（发布镜像）都查询并取更大值：组织仓库的版本号同样有效；
+      # 任一仓库查询失败时输出 warning 而非静默按 0 计算——曾因静默回退重复占用
+      # 已存在的标签，而 softprops 对已存在标签是「更新」而非「新建」，
+      # 导致 Release 被覆盖、两边仓库版本错位。
+      - name: Auto-bump versionCode
+        id: get_version
+        run: |
+          set -e
+          VERSION=$(grep '^version=' module.prop | cut -d'=' -f2 | tr -d '\r')
+          CURRENT_CODE=$(grep '^versionCode=' module.prop | cut -d'=' -f2 | tr -d '\r')
+
+          # 查询指定仓库最新 Release 的 versionCode（标签格式为 code-version）
+          query_latest() {
+            curl -sS -H "Authorization: token $1" \
+              "https://api.github.com/repos/$2/releases/latest" \
+              | grep -oP '"tag_name":\s*"\K[0-9]+' | head -1
+          }
+
+          LATEST_CODE=0
+          for entry in \
+            "${{ secrets.GITHUB_TOKEN }}|${{ github.repository }}" \
+            "${{ secrets.XPOSED_REPO_TOKEN }}|Xposed-Modules-Repo/com.nfchider"; do
+            token="${entry%%|*}"
+            repo="${entry##*|}"
+            code=$(query_latest "$token" "$repo")
+            if [ -n "$code" ]; then
+              if [ "$code" -gt "$LATEST_CODE" ]; then LATEST_CODE=$code; fi
+            else
+              echo "::warning::查询 ${repo} 最新 Release 失败，本次忽略该仓库的版本信息"
+            fi
+          done
+
+          # 新版本号 = max(各仓库最新release + 1, 当前module.prop + 1)
+          NEW_CODE=$((LATEST_CODE + 1))
+          if [ "$NEW_CODE" -le "$CURRENT_CODE" ]; then
+            NEW_CODE=$((CURRENT_CODE + 1))
+          fi
+
+          TAG="${NEW_CODE}-${VERSION}"
+          echo "versionCode=${NEW_CODE}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Bumping versionCode: ${CURRENT_CODE} -> ${NEW_CODE} (tag: ${TAG})"
+
+          # 更新所有版本文件
+          sed -i "s/^versionCode=.*/versionCode=${NEW_CODE}/" module.prop
+          sed -i "s/^versionCode=.*/versionCode=${NEW_CODE}/" app/src/main/resources/META-INF/xposed/module.prop
+          sed -i "s/versionCode = ${CURRENT_CODE}/versionCode = ${NEW_CODE}/" app/build.gradle.kts
+
       - name: Build Release APK
         run: |
           ./gradlew assembleRelease --no-daemon
-
-      - name: Extract module version
-        id: get_version
-        run: |
-          VERSION=$(grep '^version=' module.prop | cut -d'=' -f2 | tr -d '\r')
-          VERSION_CODE=$(grep '^versionCode=' module.prop | cut -d'=' -f2 | tr -d '\r')
-          echo "tag=${VERSION_CODE}-${VERSION}" >> $GITHUB_OUTPUT
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Collect APK
         run: |
@@ -88,5 +128,70 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 将自动递增的版本号回写到仓库，避免下次构建覆盖。
+      # [skip ci] 防止提交本身再次触发工作流造成无限循环。
+      - name: Commit version bump
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add module.prop app/src/main/resources/META-INF/xposed/module.prop app/build.gradle.kts
+          git commit -m "ci: bump version to ${{ steps.get_version.outputs.tag }} [skip ci]"
+          git push
+
+      # Xposed-Modules-Repo/com.nfchider 是发布镜像仓库：代码平时只在个人仓库
+      # （furina707/com.nfchider）更新，由本仓库 CI 代为同步：
+      # 1. 全量同步代码：个人仓库完整源码树 → 组织仓库（普通提交推进，保留组织仓库历史）
+      # 2. 在组织仓库创建同名 Release 并附上 APK
+      # 需要在本仓库 Settings > Secrets 中配置 XPOSED_REPO_TOKEN（有该仓库写权限的 PAT）
+      - name: Sync to Xposed-Modules-Repo
+        if: success()
+        run: |
+          set -e
+          REPO="Xposed-Modules-Repo/com.nfchider"
+          TAG="${{ steps.get_version.outputs.tag }}"
+          APK="artifacts/NfcHider-${TAG}.apk"
+
+          # 1. 全量同步代码（含自动递增后的版本文件）。
+          #    --delete 保证组织仓库不残留个人仓库已删除的文件，实现真正镜像；
+          #    排除 .git 与构建/临时产物；不用 force push，保留组织仓库提交历史。
+          git clone --depth 1 "https://x-access-token:${{ secrets.XPOSED_REPO_TOKEN }}@github.com/${REPO}.git" /tmp/xposed-repo
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='artifacts/' \
+            --exclude='build/' \
+            --exclude='app/build/' \
+            --exclude='.gradle/' \
+            --exclude='local.properties' \
+            "${GITHUB_WORKSPACE}/" /tmp/xposed-repo/
+          cd /tmp/xposed-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "代码无变化，跳过同步提交"
+          else
+            git commit -m "sync: ${TAG}"
+            git push
+          fi
+
+          # 2. 在 Xposed-Modules-Repo 创建 Release 并上传 APK
+          cd "${GITHUB_WORKSPACE}"
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.XPOSED_REPO_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/releases" \
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"draft\":false,\"prerelease\":false}" \
+            -o /tmp/release.json
+
+          UPLOAD_URL=$(grep -oP '"upload_url":\s*"\K[^"]+' /tmp/release.json | sed 's/{?name,label}//')
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.XPOSED_REPO_TOKEN }}" \
+            -H "Content-Type: application/vnd.android.package-archive" \
+            "${UPLOAD_URL}?name=NfcHider-${TAG}.apk" \
+            --data-binary @"${APK}" \
+            -o /dev/null
+          echo "已同步到 Xposed-Modules-Repo: ${TAG}"
 
 

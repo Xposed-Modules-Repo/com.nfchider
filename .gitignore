@@ -13,3 +13,7 @@ local.properties
 .tmp/
 *.jpg
 项目
+
+# Bundled third-party native binaries (DexSQL + glibc loader/libs for arm64).
+# These are large (~21MB) and fetched at build time; track only the runner code.
+app/src/main/assets/dexsql/

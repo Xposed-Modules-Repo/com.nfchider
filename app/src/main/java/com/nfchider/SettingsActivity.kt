@@ -71,7 +71,7 @@ fun MainScreen() {
                     SimConfigRepository.save(context, updated)
                     Toast.makeText(
                         context,
-                        if (newEnabled) "全局 Hook 已开启" else "全局 Hook 已关闭",
+                        if (newEnabled) "Hook 已开启" else "Hook 已关闭",
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -102,13 +102,13 @@ fun GlobalHookSwitchCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "全局系统 Hook",
+                        text = "Hook 总开关",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = if (enabled) "● 已开启 (系统框架全局生效中)" else "○ 已关闭 (已暂停所有拦截与模拟)",
+                        text = if (enabled) "● 已开启 (已勾选的应用生效中)" else "○ 已关闭 (已暂停所有拦截与模拟)",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
@@ -122,9 +122,9 @@ fun GlobalHookSwitchCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = if (enabled)
-                    "已激活系统级 Hook。系统框架对全机应用生效；在 App 内关闭此开关即可立即停止 Hook，无需重启手机。"
+                    "已激活 Hook。对 LSPosed 作用域中已勾选的每个应用单独生效；在 App 内关闭此开关即可立即停止 Hook，无需重启应用。"
                 else
-                    "已暂停拦截与模拟。各应用恢复真实系统状态；随时打开此开关即可重新启用全局 Hook。",
+                    "已暂停拦截与模拟。已勾选的应用恢复真实系统状态；随时打开此开关即可重新启用 Hook。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -153,7 +153,7 @@ fun ModuleStatusCard() {
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    text = "全局系统 Hook (无需选单独 App)",
+                    text = "按应用 Hook (在 LSPosed 勾选目标 App)",
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.bodyMedium
@@ -161,7 +161,7 @@ fun ModuleStatusCard() {
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "作用域：系统框架 (android) · 支持 App 内实时启闭",
+                text = "作用域：逐应用生效 · 支持 App 内实时启闭",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -201,7 +201,7 @@ fun LocationSimCard(config: TrajectoryConfig) {
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "支持 Google 卫星高清图层、地点收藏夹、真实移动轨迹现场录制回放与自定义路线规划。全系统应用自动获取模拟定位。",
+                text = "支持 Google 卫星高清图层、地点收藏夹、真实移动轨迹现场录制回放与自定义路线规划。已勾选的应用将自动获取模拟定位。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -214,6 +214,15 @@ fun LocationSimCard(config: TrajectoryConfig) {
             ) {
                 Text("打开卫星地图轨迹模拟与地点收藏")
             }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    context.startActivity(Intent(context, DexSqlActivity::class.java))
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("DexSQL：用 SQL 查询目标 App 的 dex")
+            }
         }
     }
 }
@@ -223,17 +232,17 @@ fun HookCategoriesCard() {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "全局拦截分类",
+                text = "拦截分类",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(8.dp))
 
-            CategoryItem("系统定位服务 (LocationManagerService)", "拦截全局 GPS/网络/Fused 定位查询与更新")
+            CategoryItem("应用定位查询 (LocationManager)", "拦截该应用内的 GPS/网络/Fused 定位查询与更新")
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            CategoryItem("位置提供者分发 (LocationProviderManager)", "重写系统 1Hz 底层硬件定位坐标汇报")
+            CategoryItem("Google 融合定位 (FusedLocationProviderClient)", "重写 Play 服务融合定位结果")
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            CategoryItem("包管理器 (PackageManager / PMS)", "拦截 NFC 硬件特性查询，隐藏 NFC 硬件")
+            CategoryItem("包管理器 (PackageManager)", "拦截 NFC 硬件特性查询，隐藏 NFC 硬件")
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             CategoryItem("NFC 适配器 (NfcAdapter / NfcManager)", "拦截硬件适配器接口调用")
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -269,14 +278,14 @@ fun TargetAppCard() {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "勾选「系统框架 (android)」即可全局生效",
+                text = "在 LSPosed 中勾选需要生效的应用",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "已切换为全局 Hook 模式，无需在 LSPosed 中逐一勾选每个单独 App。在 LSPosed 作用域中勾选「系统框架」，重启手机一次后即可在全机全局生效。在 App 内关闭开关即停用 Hook，开启即可重新生效。",
+                text = "本模块按应用逐个生效：在 LSPosed 作用域中勾选目标 App（可勾选多个），重启目标 App 后对其生效。在 App 内关闭开关即停用 Hook，开启即可重新生效，无需重启。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -295,7 +304,7 @@ fun AboutCard() {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "基于现代 libxposed 的系统级模块。支持系统全局 NFC 硬件隐藏、Google 卫星混合地图轨迹 GPS 位置模拟、真实物理航迹录制与地点收藏夹功能。",
+                text = "基于现代 libxposed 的应用级模块。支持对选定应用隐藏 NFC 硬件、Google 卫星混合地图轨迹 GPS 位置模拟、真实物理航迹录制与地点收藏夹功能。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

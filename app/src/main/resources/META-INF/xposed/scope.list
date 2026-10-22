@@ -1,2 +1,3 @@
-# Scope: System Framework for global hook
-android
+# Configure target apps via LSPosed scope UI
+# One package name per line for static scope mode.
+# Leave empty to let LSPosed manage scope dynamically.

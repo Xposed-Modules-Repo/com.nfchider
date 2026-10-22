@@ -62,6 +62,27 @@ public final class LocationSim {
     }
 
     private static final Map<Object, Runnable> LOOPS = new ConcurrentHashMap<>();
+
+    /**
+     * Original {@code requestLocationUpdates} call captured while the simulation
+     * was active. When the simulation is later disabled we re-invoke it so the
+     * real {@link LocationManager} finally registers the listener/PendingIntent
+     * and real fixes resume.
+     */
+    private static final Map<Object, Registration> PENDING = new ConcurrentHashMap<>();
+
+    private static final class Registration {
+        final Object receiver;
+        final Method method;
+        final Object[] args;
+
+        Registration(Object receiver, Method method, Object[] args) {
+            this.receiver = receiver;
+            this.method = method;
+            this.args = args;
+        }
+    }
+
     private static volatile HandlerThread simThread;
     private static volatile Handler simHandler;
     private static volatile Handler mainHandler;
@@ -246,6 +267,7 @@ public final class LocationSim {
                     else if (a instanceof Looper && looper == null) looper = (Looper) a;
                 }
                 if (listener == null) return chain.proceed();
+                storeRegistration(chain, listener);
                 if (looper == null) looper = Looper.myLooper();
                 deliverToListener(listener, provider, executor, looper);
                 return null;
@@ -261,6 +283,7 @@ public final class LocationSim {
                     else if (a instanceof String) provider = (String) a;
                 }
                 if (pi == null) return chain.proceed();
+                storeRegistration(chain, pi);
                 final PendingIntent finalPi = pi;
                 startLoop(pi, provider, loc -> sendViaPendingIntent(finalPi, loc));
                 return null;
@@ -305,7 +328,10 @@ public final class LocationSim {
             }
             case K_REMOVE_UPDATES: {
                 Object target = chain.getArg(0);
-                if (target != null) stopLoop(target);
+                if (target != null) {
+                    stopLoop(target);
+                    PENDING.remove(target);
+                }
                 return chain.proceed();
             }
             case K_IS_PROVIDER_ENABLED: {
@@ -378,6 +404,9 @@ public final class LocationSim {
                 TrajectoryConfig cfg = ConfigStore.get();
                 if (cfg != null) {
                     if (!cfg.enabled || !cfg.hasRoute()) {
+                        // Simulation turned off: hand the registration back to the
+                        // real LocationManager so real fixes resume.
+                        restoreRealUpdates(key);
                         stopLoop(key);
                         return;
                     }
@@ -400,6 +429,31 @@ public final class LocationSim {
     static void stopLoop(Object key) {
         Runnable r = LOOPS.remove(key);
         if (r != null) simHandler().removeCallbacks(r);
+    }
+
+    /** Capture the original requestLocationUpdates call for later re-registration. */
+    private static void storeRegistration(Chain chain, Object key) {
+        try {
+            PENDING.put(key, new Registration(
+                    chain.getThisObject(),
+                    (Method) chain.getExecutable(),
+                    chain.getArgs().toArray()));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Re-invoke the captured requestLocationUpdates against the real manager. */
+    private static void restoreRealUpdates(Object key) {
+        Registration reg = PENDING.remove(key);
+        if (reg == null) return;
+        try {
+            // The method is still hooked, but with the simulation now inactive
+            // handleLocationManager returns chain.proceed(), which performs the
+            // real registration, so real updates start flowing again.
+            reg.method.setAccessible(true);
+            reg.method.invoke(reg.receiver, reg.args);
+        } catch (Throwable ignored) {
+        }
     }
 
     private static Handler simHandler() {

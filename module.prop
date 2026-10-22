@@ -2,6 +2,6 @@ name=NFC Hider
 author=furina707
 description=按应用 Hook：在 LSPosed 作用域中勾选需要生效的应用，重启该应用即可对其隐藏 NFC 并模拟定位。支持高德/Google/OSM地图切换、地点搜索、折叠控制面板与地点收藏。支持 Android 10+。
 version=1.1
-versionCode=10
+versionCode=11
 minApiVersion=101
 targetApiVersion=102
