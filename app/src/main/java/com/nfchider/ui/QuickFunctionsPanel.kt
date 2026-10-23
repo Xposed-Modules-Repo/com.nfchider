@@ -73,6 +73,8 @@ data class QuickFunction(
  * @param functions 全部功能，顺序即展示顺序（前 coreCount 个常驻）
  * @param open 面板是否展开（false 时仅显示标题药丸）
  * @param showAll 是否展示核心功能之外的功能
+ * @param headerAction 标题行右侧的额外动作插槽（如「设置」齿轮入口）；
+ *        折叠态仅剩标题药丸时该入口依然可见，保证随时可达
  */
 @Composable
 fun QuickFunctionsPanel(
@@ -82,7 +84,8 @@ fun QuickFunctionsPanel(
     showAll: Boolean,
     onShowAllChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
-    coreCount: Int = 8
+    coreCount: Int = 8,
+    headerAction: (@Composable () -> Unit)? = null
 ) {
     Surface(
         modifier = modifier.width(260.dp),
@@ -114,6 +117,10 @@ fun QuickFunctionsPanel(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.weight(1f))
+                headerAction?.invoke()
+                if (headerAction != null) {
+                    Spacer(modifier = Modifier.width(2.dp))
+                }
                 Icon(
                     imageVector = if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     contentDescription = null,

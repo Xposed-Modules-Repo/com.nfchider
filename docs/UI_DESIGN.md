@@ -113,6 +113,7 @@ MapPalette.Dark   // 暗底瓦片：路线 #7FB0FF / 录制 #5EFC82 / 收藏 #FF
 - 每张卡片增加**引导图标**（盾牌=总开关、芯片=模块状态、地图=位置模拟、分类=拦截分类、应用=作用域、信息=关于）。
 - 标题层级：卡片标题 `titleMedium` + 描述 `bodySmall`，统一 16dp 内边距。
 - 总开关卡片：开启时 primaryContainer + 状态徽章；关闭时 surfaceVariant。
+- **入口变更（v1.1.19）**：不再是 LAUNCHER；App 启动直接进入地图（MapActivity），本页经地图「快捷功能」面板标题行的设置齿轮进入；顶栏标题改为「设置」并新增返回箭头（系统返回键等效）。
 
 ### 3.6 应用图标（Launcher Icon）
 
@@ -132,6 +133,14 @@ MapPalette.Dark   // 暗底瓦片：路线 #7FB0FF / 录制 #5EFC82 / 收藏 #FF
 - **移除底部控制面板**：原常驻底部面板（速度/模式/启停/录制仪表）整体拆除，速度/模式/启停迁入 `SimControlDialog`（「速度」圆唤起），录制控制迁入 `RecordingControlDialog`（录制圆唤起）；面板折叠态的「状态摘要」升级为顶部 `SimStatusPill` 状态药丸——状态点 + 运行状态/实时广播坐标 + 模拟中快捷停止，一行展示，不占用地图底部空间。
 - **定位精度圈**：按 fix 的 accuracy 半径生成 48 边形 `Polygon` overlay（半透明填充 + 细描边），先于蓝点加入 overlays 保证蓝点绘制在精度圈之上；半径封顶 400m，`accuracy < 5m` 时隐藏。
 - **功能色板扩充**：`QuickFunctionColors` 新增 Speed / Undo / Clear / Import 四色，功能圆从 12 个扩至 17 个。
+
+### 3.8 地图即启动页与设置入口（v1.1.19）
+
+原启动主界面（Hook 总开关 / 模块状态 / 位置模拟 / 拦截分类）整体改为设置页，App 打开直接进入卫星地图：
+
+- **Manifest 交换启动入口**：MapActivity 增加 `MAIN`/`LAUNCHER` intent-filter（`exported=true`）；SettingsActivity 移除 LAUNCHER filter（`exported=false`），label 改为「设置」。任务栈底为地图，设置页返回/系统返回均回到地图。
+- **设置齿轮入口**：`QuickFunctionsPanel` 标题行（「快捷功能」药丸）新增 `headerAction` 插槽，位于权重 Spacer 与折叠 chevron 之间；面板折叠为标题药丸时齿轮依然可见，随时可达；不占用地图可视面积、不打乱 17 个功能圆网格。齿轮为 30dp IconButton + 18dp 字形，`onSurfaceVariant` 着色，与面板标题行视觉同级。
+- **设置页返回**：顶栏新增 `ArrowBack` 导航箭头（`finish()`），与系统返回键等效；顶栏标题由「NFC Hider」改为「设置」，manifest label 同步。
 
 ---
 

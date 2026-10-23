@@ -20,20 +20,22 @@
         android:description="@string/app_description"
         android:allowBackup="false">
 
+        <!-- 设置页：App 启动后经地图顶栏齿轮进入，不再是 LAUNCHER -->
         <activity
             android:name=".SettingsActivity"
-            android:label="NFC Hider"
+            android:label="设置"
+            android:exported="false" />
+
+        <!-- 地图即启动页：打开 App 直接进入卫星地图轨迹模拟 -->
+        <activity
+            android:name=".MapActivity"
+            android:label="位置模拟"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".MapActivity"
-            android:label="位置模拟"
-            android:exported="false" />
 
         <activity
             android:name=".DexSqlActivity"

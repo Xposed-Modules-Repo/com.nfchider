@@ -2,6 +2,7 @@ package com.nfchider
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
@@ -58,6 +59,7 @@ import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
@@ -921,6 +923,23 @@ fun LocationSimScreen() {
                 onOpenChange = { quickPanelOpen = it },
                 showAll = quickPanelShowAll,
                 onShowAllChange = { quickPanelShowAll = it },
+                // 设置入口：地图即 App 启动页，原启动主界面（Hook 开关/模块状态/
+                // 位置模拟/拦截分类）已改为设置页，经此齿轮进入；折叠态依然可见
+                headerAction = {
+                    IconButton(
+                        onClick = {
+                            context.startActivity(Intent(context, SettingsActivity::class.java))
+                        },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = "设置",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(12.dp)
