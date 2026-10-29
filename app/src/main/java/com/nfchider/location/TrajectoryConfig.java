@@ -40,6 +40,20 @@ public class TrajectoryConfig {
 
     /** True when the simulation is active for this config. */
     public final boolean enabled;
+    /**
+     * True when NFC hardware must be hidden from hooked apps.
+     *
+     * <p>Kept separate from {@link #enabled}: NFC hiding is the module's headline
+     * feature and must keep working for users who never set up a location route,
+     * while {@code enabled} also drives the trajectory engine and cannot be
+     * turned on without waypoints.
+     */
+    public final boolean nfcHide;
+    /**
+     * Master kill switch (the "Hook 总开关" in Settings). Defaults to on so the
+     * module works once installed; turning it off stops every interception.
+     */
+    public final boolean masterOn;
     /** ONCE / LOOP / PINGPONG. */
     public final String mode;
     /** Movement speed in meters per second. */
@@ -53,9 +67,12 @@ public class TrajectoryConfig {
     /** Ordered route waypoints; at least one for a stationary fix. */
     public final List<Point> points;
 
-    private TrajectoryConfig(boolean enabled, String mode, double speedMps, double accuracyM,
-                             long updateIntervalMs, long startAt, List<Point> points) {
+    private TrajectoryConfig(boolean enabled, boolean nfcHide, boolean masterOn, String mode,
+                             double speedMps, double accuracyM, long updateIntervalMs,
+                             long startAt, List<Point> points) {
         this.enabled = enabled;
+        this.nfcHide = nfcHide;
+        this.masterOn = masterOn;
         this.mode = mode;
         this.speedMps = speedMps;
         this.accuracyM = accuracyM;
@@ -75,6 +92,8 @@ public class TrajectoryConfig {
     public Builder toBuilder() {
         Builder b = new Builder();
         b.enabled = enabled;
+        b.nfcHide = nfcHide;
+        b.masterOn = masterOn;
         b.mode = mode;
         b.speedMps = speedMps;
         b.accuracyM = accuracyM;
@@ -89,6 +108,8 @@ public class TrajectoryConfig {
         try {
             o.put("v", 1);
             o.put("enabled", enabled);
+            o.put("nfcHide", nfcHide);
+            o.put("masterOn", masterOn);
             o.put("mode", mode);
             o.put("speedMps", speedMps);
             o.put("accuracyM", accuracyM);
@@ -117,6 +138,10 @@ public class TrajectoryConfig {
             JSONObject o = new JSONObject(json);
             Builder b = new Builder();
             b.enabled = o.optBoolean("enabled", false);
+            // Default true: an existing config that predates this field was almost
+            // certainly written by a user who installed the module for NFC hiding.
+            b.nfcHide = o.optBoolean("nfcHide", true);
+            b.masterOn = o.optBoolean("masterOn", true);
             String mode = o.optString("mode", MODE_LOOP);
             b.mode = MODE_ONCE.equals(mode) || MODE_PINGPONG.equals(mode) ? mode : MODE_LOOP;
             b.speedMps = o.optDouble("speedMps", DEFAULT_SPEED_MPS);
@@ -146,6 +171,8 @@ public class TrajectoryConfig {
 
     public static final class Builder {
         private boolean enabled = false;
+        private boolean nfcHide = true;
+        private boolean masterOn = true;
         private String mode = MODE_LOOP;
         private double speedMps = DEFAULT_SPEED_MPS;
         private double accuracyM = DEFAULT_ACCURACY_M;
@@ -154,6 +181,8 @@ public class TrajectoryConfig {
         private final List<Point> points = new ArrayList<>();
 
         public Builder enabled(boolean v) { this.enabled = v; return this; }
+        public Builder nfcHide(boolean v) { this.nfcHide = v; return this; }
+        public Builder masterOn(boolean v) { this.masterOn = v; return this; }
         public Builder mode(String v) { this.mode = v; return this; }
         public Builder speedMps(double v) { this.speedMps = v; return this; }
         public Builder accuracyM(double v) { this.accuracyM = v; return this; }
@@ -162,7 +191,7 @@ public class TrajectoryConfig {
         public List<Point> points() { return points; }
 
         public TrajectoryConfig build() {
-            return new TrajectoryConfig(enabled, mode, speedMps, accuracyM,
+            return new TrajectoryConfig(enabled, nfcHide, masterOn, mode, speedMps, accuracyM,
                     updateIntervalMs, startAt, new ArrayList<>(points));
         }
     }

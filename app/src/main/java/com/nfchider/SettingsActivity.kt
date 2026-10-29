@@ -85,21 +85,39 @@ fun MainScreen() {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             GlobalHookSwitchCard(
-                enabled = config.enabled,
+                enabled = config.masterOn,
                 onToggle = { newEnabled ->
                     // BUG-02 fix: re-enabling from this screen must restart the
                     // trajectory clock, otherwise TrajectoryEngine jumps to the
                     // position implied by the old startAt (e.g. straight to the
                     // route end in ONCE mode after the hook was off for a while).
                     val updated = config.toBuilder()
-                        .enabled(newEnabled)
-                        .startAt(if (newEnabled) System.currentTimeMillis() else config.startAt)
+                        .masterOn(newEnabled)
+                        .enabled(newEnabled && config.points.isNotEmpty())
+                        .startAt(
+                            if (newEnabled && config.points.isNotEmpty())
+                                System.currentTimeMillis()
+                            else config.startAt
+                        )
                         .build()
                     config = updated
                     SimConfigRepository.save(context, updated)
                     Toast.makeText(
                         context,
                         if (newEnabled) "Hook 已开启" else "Hook 已关闭",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            )
+            NfcHideCard(
+                hidden = config.nfcHide,
+                onToggle = { newHidden ->
+                    val updated = config.toBuilder().nfcHide(newHidden).build()
+                    config = updated
+                    SimConfigRepository.save(context, updated)
+                    Toast.makeText(
+                        context,
+                        if (newHidden) "NFC 隐藏已开启" else "NFC 隐藏已关闭",
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -191,6 +209,48 @@ fun GlobalHookSwitchCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                     "已激活 Hook。对 LSPosed 作用域中已勾选的每个应用单独生效；在 App 内关闭此开关即可立即停止 Hook，无需重启应用。"
                 else
                     "已暂停拦截与模拟。已勾选的应用恢复真实系统状态；随时打开此开关即可重新启用 Hook。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+fun NfcHideCard(hidden: Boolean, onToggle: (Boolean) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (hidden) MaterialTheme.colorScheme.tertiaryContainer
+            else MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "NFC 隐藏",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = if (hidden) "● 已隐藏 NFC 硬件" else "○ 目标应用可检测到 NFC",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (hidden) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline
+                    )
+                }
+                Switch(checked = hidden, onCheckedChange = onToggle)
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "拦截 NfcAdapter、NfcManager.getDefaultAdapter() 与 PackageManager 的 NFC 特性查询。此开关独立于位置模拟，无需路线点即可生效。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

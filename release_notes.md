@@ -1,3 +1,21 @@
+### NFC Hider 20-1.1.20
+
+1. **修复「NFC 不能隐藏」（重要）**：
+   - 根因：NFC 隐藏与位置模拟共用同一个 `enabled` 开关。首装时 `enabled=false`，且地图上「启停」在没有路线点时只会弹 Toast、
+     「停止模拟」会把 `enabled` 置 false —— 三种情况下三条 NFC Hook 全部走 `chain.proceed()`，NFC 完全暴露；
+   - 新增独立的 `nfcHide` 开关（默认开启），与位置模拟彻底解耦：无需任何路线点、停止/未启动模拟都不会关闭 NFC 隐藏；
+   - 「Hook 总开关」改为独立的 `masterOn` 总闸（默认开启），不再兼任模拟启停；关闭它才会同时停掉 NFC 隐藏与定位模拟；
+   - 设置页新增「NFC 隐藏」卡片（开关 + 说明），旧配置缺失 `nfcHide` 字段时按 `true` 迁移，升级用户不会被降级为暴露。
+2. **扩大 NFC 特性拦截面**：
+   - 新增拦截 `PackageManager.getSystemAvailableFeatures()`：此前只拦 `hasSystemFeature()`，枚举硬件的应用仍能列出 `android.hardware.nfc`；
+   - `hasSystemFeature` 的入参改为 `instanceof String` 保护后再比较，避免非 String 实参触发 `ClassCastException`；
+   - 三条 NFC Hook 统一加 `ExceptionMode.PROTECTIVE`，Hook 回调自身抛异常时不再让目标应用崩溃。
+3. **配置下发可靠性**：
+   - `ConfigStore.init()` 的 `inited` 标志改到成功后再置位：`getRemotePreferences` 偶发失败不再永久关闭整个进程的推送通道；
+   - `refresh()` 不再因缓存非空就提前返回，改为「provider（模块 App 自己写的文件）优先、推送值兜底」，避免陈旧推送值掩盖真实开关状态；
+   - 模块 App 首次启动即落盘一份默认配置，`ConfigProvider` 兜底通道在任何时候都有东西可读。
+4. 沿袭 19-1.1.19 的全部功能（地图即启动页、设置页）。
+
 ### NFC Hider 19-1.1.19
 
 1. **地图即启动页，原界面整体改为设置页**：

@@ -869,6 +869,8 @@ fun LocationSimScreen() {
                         } else {
                             Toast.makeText(context, "请先添加路线点（标记 / 搜索 / 导入 GPX）", Toast.LENGTH_SHORT).show()
                         }
+                        // Note: this only drives the location simulation. NFC hiding
+                        // has its own switch in Settings and stays on regardless.
                     },
                     // 模拟控制（原底部面板展开区）：速度 / 预设 / 播放模式 / 启停
                     QuickFunction(Icons.Filled.Speed, "速度", QuickFunctionColors.Speed) {

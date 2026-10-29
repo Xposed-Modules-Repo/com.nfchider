@@ -54,7 +54,6 @@ public final class ConfigStore {
 
     public static void init(XposedInterface api) {
         if (inited) return;
-        inited = true;
         try {
             SharedPreferences prefs = api.getRemotePreferences(PREFS_GROUP);
             SharedPreferences.OnSharedPreferenceChangeListener l = (p, key) -> {
@@ -64,8 +63,12 @@ public final class ConfigStore {
             prefs.registerOnSharedPreferenceChangeListener(l);
             remotePrefs = prefs;
             readRemoteIntoCache(prefs);
+            inited = true;
         } catch (Throwable t) {
-            // Framework without remote preferences support; fall back to the provider.
+            // Framework without remote preferences support, or the binder simply
+            // was not ready yet. Leave `inited` false so a later package load can
+            // retry: previously the flag was set before the try, so one transient
+            // failure silently killed the push channel for the whole process.
             remotePrefs = null;
         }
     }
@@ -88,16 +91,38 @@ public final class ConfigStore {
         }
     }
 
-    /** True when the in-app global hook switch is enabled. */
+    /**
+     * Legacy alias for {@link #isSimActive()}, kept only so older call sites
+     * keep compiling. Prefer the explicit method: "hook enabled" used to mean
+     * both NFC hiding and location simulation, which is exactly what made the
+     * two features impossible to control independently.
+     */
     public static boolean isHookEnabled() {
         TrajectoryConfig c = get();
-        return c != null && c.enabled;
+        return c != null && c.masterOn && c.enabled;
+    }
+
+    /**
+     * True when NFC hardware must be hidden from this process.
+     *
+     * <p>Deliberately independent of {@link #isHookEnabled()}: the two features
+     * have different defaults and different preconditions. NFC hiding is on as
+     * soon as a config exists (or even before one does — see
+     * {@link TrajectoryConfig#fromJson} and the builder default), so a fresh
+     * install hides NFC without the user having to discover a switch.
+     */
+    public static boolean isNfcHidden() {
+        TrajectoryConfig c = get();
+        // No config yet: the module app has never run. Fail "hidden" rather than
+        // "exposed" — the user installed an app called "NFC Hider".
+        if (c == null) return true;
+        return c.masterOn && c.nfcHide;
     }
 
     /** True when the simulation is enabled and has at least one waypoint. */
     public static boolean isSimActive() {
         TrajectoryConfig c = get();
-        return c != null && c.enabled && c.hasRoute();
+        return c != null && c.masterOn && c.enabled && c.hasRoute();
     }
 
     /** True when a config was ever successfully loaded. */
@@ -119,22 +144,41 @@ public final class ConfigStore {
 
     private static void refresh() {
         lastFetchElapsed = SystemClock.elapsedRealtime();
-        if (remotePrefs != null) {
-            readRemoteIntoCache(remotePrefs);
-            if (cached != null) return;
-        }
+
+        // 1. Push channel first — it is the cheap one and reflects live edits.
+        TrajectoryConfig pushed = null;
+        if (remotePrefs != null) pushed = readRemote(remotePrefs);
+
+        // 2. Always consult the provider too. The old code returned early whenever
+        //    the cache was non-empty, so a stale pushed value (module app
+        //    force-stopped mid-push) masked the file the app actually wrote and
+        //    switch changes never reached this process. The provider reads the
+        //    module app's own file, so it wins whenever it has an answer.
+        TrajectoryConfig fromProvider = null;
         Context ctx = appContext;
         if (ctx != null) {
             try {
                 Bundle b = ctx.getContentResolver().call(
                         Uri.parse(PROVIDER_URI), "get", null, null);
                 if (b != null) {
-                    TrajectoryConfig cfg = TrajectoryConfig.fromJson(b.getString("config"));
-                    if (cfg != null) cached = cfg;
+                    fromProvider = TrajectoryConfig.fromJson(b.getString("config"));
                 }
             } catch (Throwable ignored) {
-                // Module app gone or provider not visible from this process; keep last value.
+                // Module app gone or provider not visible from this process.
             }
+        }
+
+        if (fromProvider != null) cached = fromProvider;
+        else if (pushed != null) cached = pushed;
+        // else: keep the previous value; a null cache means "NFC hidden, sim off".
+    }
+
+    /** Reads the current value out of remote preferences without touching {@link #cached}. */
+    private static TrajectoryConfig readRemote(SharedPreferences prefs) {
+        try {
+            return TrajectoryConfig.fromJson(prefs.getString(KEY_JSON, null));
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 }

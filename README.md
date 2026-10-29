@@ -15,7 +15,7 @@
 
 ## 功能
 
-- **NFC 隐藏**：拦截 `PackageManager` / `NfcAdapter`，目标应用无法探测 NFC 硬件。
+- **NFC 隐藏**：拦截 `PackageManager`（`hasSystemFeature` / `getSystemAvailableFeatures`）、`NfcAdapter` 与 `NfcManager.getDefaultAdapter()`，目标应用无法探测 NFC 硬件。安装即默认开启，与定位模拟相互独立，无需路线点。
 - **定位模拟**：拦截 `LocationManager` / `FusedLocationProviderClient`，剥除 `isMock()` 标识，识别为真实定位。
 - **按应用生效**：LSPosed 勾选目标 App，重启生效；App 内总开关实时启停。
 - **多源地图**：高德（国内直连）、Google 卫星混合、OSM，异常自动诊断。
@@ -29,7 +29,9 @@
 1. 安装并启用 LSPosed，勾选 **NFC Hider**。
 2. 作用域勾选目标 App，重启该 App。
 3. 打开 NFC Hider **直接进入卫星地图**：切换图层、搜索地点、模拟定位或录制轨迹。
-4. 点右侧「快捷功能」面板标题行的**齿轮图标**进入设置：Hook 总开关、模块状态、拦截分类等都在设置页。
+4. 点右侧「快捷功能」面板标题行的**齿轮图标**进入设置：NFC 隐藏开关、Hook 总开关、模块状态、拦截分类等都在设置页。
+   - **NFC 隐藏**默认开启，装完即可生效；只有关闭它或关闭「Hook 总开关」才会停止隐藏。
+   - **Hook 总开关**是总闸，关闭后 NFC 隐藏与定位模拟同时停止。
 
 ## 环境
 

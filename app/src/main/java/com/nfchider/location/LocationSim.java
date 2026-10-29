@@ -231,14 +231,14 @@ public final class LocationSim {
 
     private static boolean isSimActive() {
         TrajectoryConfig cfg = ConfigStore.get();
-        return cfg != null && cfg.enabled && cfg.hasRoute();
+        return cfg != null && cfg.masterOn && cfg.enabled && cfg.hasRoute();
     }
 
     private static Object handleLocationManager(Chain chain, int kind) throws Throwable {
         switch (kind) {
             case K_LAST_KNOWN: {
                 TrajectoryConfig cfg = ConfigStore.get();
-                if (cfg == null || !cfg.enabled || !cfg.hasRoute()) {
+                if (cfg == null || !cfg.masterOn || !cfg.enabled || !cfg.hasRoute()) {
                     return chain.proceed();
                 }
                 Object providerArg = chain.getArg(0);
@@ -247,7 +247,7 @@ public final class LocationSim {
             }
             case K_GET_CURRENT: {
                 TrajectoryConfig cfg = ConfigStore.get();
-                if (cfg == null || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
+                if (cfg == null || !cfg.masterOn || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
                 List<Object> args = chain.getArgs();
                 String provider = "gps";
                 Consumer<Location> consumer = null;
@@ -265,7 +265,7 @@ public final class LocationSim {
             }
             case K_REQ_UPDATES_LISTENER: {
                 TrajectoryConfig cfg = ConfigStore.get();
-                if (cfg == null || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
+                if (cfg == null || !cfg.masterOn || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
                 List<Object> args = chain.getArgs();
                 LocationListener listener = null;
                 String provider = LocationManager.GPS_PROVIDER;
@@ -285,7 +285,7 @@ public final class LocationSim {
             }
             case K_REQ_UPDATES_PI: {
                 TrajectoryConfig cfg = ConfigStore.get();
-                if (cfg == null || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
+                if (cfg == null || !cfg.masterOn || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
                 List<Object> args = chain.getArgs();
                 PendingIntent pi = null;
                 String provider = LocationManager.GPS_PROVIDER;
@@ -301,7 +301,7 @@ public final class LocationSim {
             }
             case K_SINGLE_UPDATE_LISTENER: {
                 TrajectoryConfig cfg = ConfigStore.get();
-                if (cfg == null || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
+                if (cfg == null || !cfg.masterOn || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
                 List<Object> args = chain.getArgs();
                 LocationListener listener = null;
                 Looper looper = null;
@@ -325,7 +325,7 @@ public final class LocationSim {
             }
             case K_SINGLE_UPDATE_PI: {
                 TrajectoryConfig cfg = ConfigStore.get();
-                if (cfg == null || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
+                if (cfg == null || !cfg.masterOn || !cfg.enabled || !cfg.hasRoute()) return chain.proceed();
                 List<Object> args = chain.getArgs();
                 PendingIntent pi = null;
                 String provider = LocationManager.GPS_PROVIDER;
@@ -414,7 +414,7 @@ public final class LocationSim {
                 if (LOOPS.get(key) != tick[0]) return;
                 TrajectoryConfig cfg = ConfigStore.get();
                 if (cfg != null) {
-                    if (!cfg.enabled || !cfg.hasRoute()) {
+                    if (!cfg.masterOn || !cfg.enabled || !cfg.hasRoute()) {
                         // Simulation turned off: hand the registration back to the
                         // real LocationManager so real fixes resume.
                         restoreRealUpdates(key);
