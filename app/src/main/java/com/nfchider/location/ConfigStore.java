@@ -9,7 +9,7 @@ import android.os.SystemClock;
 import io.github.libxposed.api.XposedInterface;
 
 /**
- * Hook-side access to the simulation config written by the module app.
+ * Hook-side access to the NFC-hiding config written by the module app.
  *
  * Two channels, in order of preference:
  * <ol>
@@ -17,11 +17,9 @@ import io.github.libxposed.api.XposedInterface;
  *     <li>the module app's exported {@link ConfigProvider} (polled)</li>
  * </ol>
  * When both fail the cache keeps its last value; a process that never saw a
- * config simply behaves as if the simulation were disabled.
+ * config simply hides NFC (the safe default for a module called "NFC Hider").
  */
 public final class ConfigStore {
-
-    private static final String TAG = "NfcHider/Loc";
 
     private static final String PREFS_GROUP = "location";
     private static final String KEY_JSON = "config_json";
@@ -37,11 +35,10 @@ public final class ConfigStore {
      * Strong anchor for the remote-preferences listener registered in {@link #init}.
      *
      * <p>libxposed's {@code RemotePreferences} keeps listeners in a
-     * {@link java.util.WeakHashMap} (see {@code RemotePreferences} line 34 of
-     * io.github.libxposed:service), so a listener that is not referenced anywhere
-     * else may be garbage-collected at any time. Without this anchor the push
-     * channel silently dies after a GC and config changes made in the module app
-     * never reach hooked processes until they are restarted.
+     * {@link java.util.WeakHashMap}, so a listener that is not referenced
+     * anywhere else may be garbage-collected at any time. Without this anchor
+     * the push channel silently dies after a GC and switch changes never reach
+     * hooked processes until they are restarted.
      */
     private static SharedPreferences.OnSharedPreferenceChangeListener listenerRef;
 
@@ -67,20 +64,19 @@ public final class ConfigStore {
         } catch (Throwable t) {
             // Framework without remote preferences support, or the binder simply
             // was not ready yet. Leave `inited` false so a later package load can
-            // retry: previously the flag was set before the try, so one transient
-            // failure silently killed the push channel for the whole process.
+            // retry.
             remotePrefs = null;
         }
     }
 
     /** Called from the ContextWrapper.attachBaseContext hook; supplies a Context for provider reads. */
-    static void onContextAvailable(Context context) {
+    public static void onContextAvailable(Context context) {
         if (context != null && appContext == null) {
             appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
         }
     }
 
-    /** Current config, or null when unavailable/disabled. Never throws. */
+    /** Current config, or null when unavailable. Never throws. */
     public static TrajectoryConfig get() {
         TrajectoryConfig c = cached;
         if (c != null && SystemClock.elapsedRealtime() - lastFetchElapsed < FRESH_MS) return c;
@@ -92,42 +88,15 @@ public final class ConfigStore {
     }
 
     /**
-     * Legacy alias for {@link #isSimActive()}, kept only so older call sites
-     * keep compiling. Prefer the explicit method: "hook enabled" used to mean
-     * both NFC hiding and location simulation, which is exactly what made the
-     * two features impossible to control independently.
-     */
-    public static boolean isHookEnabled() {
-        TrajectoryConfig c = get();
-        return c != null && c.masterOn && c.enabled;
-    }
-
-    /**
      * True when NFC hardware must be hidden from this process.
      *
-     * <p>Deliberately independent of {@link #isHookEnabled()}: the two features
-     * have different defaults and different preconditions. NFC hiding is on as
-     * soon as a config exists (or even before one does — see
-     * {@link TrajectoryConfig#fromJson} and the builder default), so a fresh
-     * install hides NFC without the user having to discover a switch.
+     * <p>No config yet means the module app has never run: fail "hidden" rather
+     * than "exposed", so the module works immediately after installation.
      */
     public static boolean isNfcHidden() {
         TrajectoryConfig c = get();
-        // No config yet: the module app has never run. Fail "hidden" rather than
-        // "exposed" — the user installed an app called "NFC Hider".
         if (c == null) return true;
         return c.masterOn && c.nfcHide;
-    }
-
-    /** True when the simulation is enabled and has at least one waypoint. */
-    public static boolean isSimActive() {
-        TrajectoryConfig c = get();
-        return c != null && c.masterOn && c.enabled && c.hasRoute();
-    }
-
-    /** True when a config was ever successfully loaded. */
-    public static boolean haveConfig() {
-        return cached != null;
     }
 
     private static void readRemoteIntoCache(SharedPreferences prefs) {
@@ -149,11 +118,9 @@ public final class ConfigStore {
         TrajectoryConfig pushed = null;
         if (remotePrefs != null) pushed = readRemote(remotePrefs);
 
-        // 2. Always consult the provider too. The old code returned early whenever
-        //    the cache was non-empty, so a stale pushed value (module app
-        //    force-stopped mid-push) masked the file the app actually wrote and
-        //    switch changes never reached this process. The provider reads the
-        //    module app's own file, so it wins whenever it has an answer.
+        // 2. Always consult the provider too, so a stale pushed value cannot mask
+        //    the file the app actually wrote. The provider reads the module app's
+        //    own file, so it wins whenever it has an answer.
         TrajectoryConfig fromProvider = null;
         Context ctx = appContext;
         if (ctx != null) {
@@ -170,7 +137,7 @@ public final class ConfigStore {
 
         if (fromProvider != null) cached = fromProvider;
         else if (pushed != null) cached = pushed;
-        // else: keep the previous value; a null cache means "NFC hidden, sim off".
+        // else: keep the previous value; a null cache means "NFC hidden".
     }
 
     /** Reads the current value out of remote preferences without touching {@link #cached}. */

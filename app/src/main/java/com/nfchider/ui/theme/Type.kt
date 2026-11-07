@@ -11,10 +11,7 @@ import androidx.compose.ui.unit.sp
  *
  * 针对中文界面调整：正文行高不低于字号的 1.5 倍（汉字方块字密度高），
  * 标题使用 Medium/SemiBold 而非 Black，保持工具类 App 的克制感。
- * 数字场景（坐标、速度）使用等宽字体 [MonoNumeric]，避免刷新时跳字。
  */
-val MonoNumeric = FontFamily.Monospace
-
 val NfcHiderTypography = Typography(
     displayLarge = TextStyle(
         fontFamily = FontFamily.Default,

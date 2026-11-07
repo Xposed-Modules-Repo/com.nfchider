@@ -9,8 +9,8 @@ import java.io.File
 
 /**
  * Fallback config channel for hooked processes when the Xposed framework does
- * not provide remote preferences. Serves the JSON config file written by the
- * module app. Read-only; only reacts to the "get" call method.
+ * not provide remote preferences. Serves the NFC-hiding JSON config file
+ * written by the module app. Read-only; only reacts to the "get" call method.
  */
 class ConfigProvider : ContentProvider() {
 

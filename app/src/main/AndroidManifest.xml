@@ -2,16 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-
-    <!-- osmdroid merges optional location uses-features; this module has no
-         location hardware requirement of its own -->
-    <uses-feature android:name="android.hardware.location.network" tools:node="remove" />
-    <uses-feature android:name="android.hardware.location.gps" tools:node="remove" />
-
     <application
         android:name=".App"
         android:label="NFC Hider"
@@ -20,27 +10,16 @@
         android:description="@string/app_description"
         android:allowBackup="false">
 
-        <!-- 设置页：App 启动后经地图顶栏齿轮进入，不再是 LAUNCHER -->
+        <!-- 主界面：NFC 隐藏开关与作用域指引 -->
         <activity
             android:name=".SettingsActivity"
-            android:label="设置"
-            android:exported="false" />
-
-        <!-- 地图即启动页：打开 App 直接进入卫星地图轨迹模拟 -->
-        <activity
-            android:name=".MapActivity"
-            android:label="位置模拟"
+            android:label="NFC Hider"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".DexSqlActivity"
-            android:label="DexSQL 查询"
-            android:exported="false" />
 
         <!-- Receive the libxposed service binder from the framework -->
         <provider
@@ -49,7 +28,7 @@
             android:exported="true"
             tools:ignore="ExportedContentProvider" />
 
-        <!-- Fallback config channel: hooked apps read the simulation config here
+        <!-- Fallback config channel: hooked apps read the NFC-hiding config here
              when the framework does not provide remote preferences -->
         <provider
             android:name=".location.ConfigProvider"
@@ -63,7 +42,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="按应用 Hook：在 LSPosed 作用域中勾选需要生效的应用，重启该应用即可对其隐藏 NFC 并模拟定位。支持高德/Google/OSM地图切换、地点搜索、折叠控制面板与地点收藏。" />
+            android:value="按应用 Hook：在 LSPosed 作用域中勾选需要生效的应用，重启该应用即可对其隐藏 NFC 硬件。支持 Android 10+。" />
         <meta-data
             android:name="xposedminversion"
             android:value="101" />

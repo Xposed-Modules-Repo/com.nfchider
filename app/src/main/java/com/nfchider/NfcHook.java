@@ -1,5 +1,7 @@
 package com.nfchider;
 
+import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.pm.FeatureInfo;
 import android.nfc.NfcAdapter;
 import android.nfc.NfcManager;
@@ -29,9 +31,30 @@ public class NfcHook extends XposedModule {
 
         Log.i(TAG, "Hooking NFC for: " + param.getPackageName());
 
+        hookContextAttach();
         hookNfcAdapter();
         hookNfcManager();
         hookPackageManager(param);
+    }
+
+    /**
+     * Capture an app Context so the {@code ConfigProvider} fallback channel can
+     * be queried when the framework does not provide remote preferences.
+     */
+    private void hookContextAttach() {
+        try {
+            Method m = ContextWrapper.class.getDeclaredMethod("attachBaseContext", Context.class);
+            hook(m).setExceptionMode(ExceptionMode.PROTECTIVE).intercept(chain -> {
+                try {
+                    Object arg = chain.getArg(0);
+                    if (arg instanceof Context) ConfigStore.onContextAvailable((Context) arg);
+                } catch (Throwable ignored) {
+                }
+                return chain.proceed();
+            });
+        } catch (Throwable t) {
+            Log.w(TAG, "hookContextAttach failed: " + t);
+        }
     }
 
     private void hookNfcAdapter() {

@@ -1,24 +1,37 @@
 package com.nfchider
 
-import android.app.Activity
-import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material3.*
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,9 +42,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import android.widget.Toast
 import com.nfchider.location.SimConfigRepository
-import com.nfchider.location.TrajectoryConfig
 import com.nfchider.ui.theme.NfcHiderTheme
 
 class SettingsActivity : ComponentActivity() {
@@ -51,24 +62,10 @@ fun MainScreen() {
     val context = LocalContext.current
     var config by remember { mutableStateOf(SimConfigRepository.load(context)) }
 
-    LaunchedEffect(Unit) {
-        config = SimConfigRepository.load(context)
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("设置") },
-                // 地图即启动页，本页为设置页：左上角箭头显式返回地图
-                // （系统返回键同样回到地图）
-                navigationIcon = {
-                    IconButton(onClick = { (context as? Activity)?.finish() }) {
-                        Icon(
-                            imageVector = Icons.Filled.ArrowBack,
-                            contentDescription = "返回地图"
-                        )
-                    }
-                },
+                title = { Text("NFC Hider") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -87,19 +84,7 @@ fun MainScreen() {
             GlobalHookSwitchCard(
                 enabled = config.masterOn,
                 onToggle = { newEnabled ->
-                    // BUG-02 fix: re-enabling from this screen must restart the
-                    // trajectory clock, otherwise TrajectoryEngine jumps to the
-                    // position implied by the old startAt (e.g. straight to the
-                    // route end in ONCE mode after the hook was off for a while).
-                    val updated = config.toBuilder()
-                        .masterOn(newEnabled)
-                        .enabled(newEnabled && config.points.isNotEmpty())
-                        .startAt(
-                            if (newEnabled && config.points.isNotEmpty())
-                                System.currentTimeMillis()
-                            else config.startAt
-                        )
-                        .build()
+                    val updated = config.toBuilder().masterOn(newEnabled).build()
                     config = updated
                     SimConfigRepository.save(context, updated)
                     Toast.makeText(
@@ -123,8 +108,6 @@ fun MainScreen() {
                 }
             )
             ModuleStatusCard()
-            LocationSimCard(config)
-            HookCategoriesCard()
             TargetAppCard()
             AboutCard()
         }
@@ -192,7 +175,7 @@ fun GlobalHookSwitchCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                     }
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = if (enabled) "● 已开启 (已勾选的应用生效中)" else "○ 已关闭 (已暂停所有拦截与模拟)",
+                        text = if (enabled) "● 已开启 (已勾选的应用生效中)" else "○ 已关闭 (已暂停所有拦截)",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
@@ -208,7 +191,7 @@ fun GlobalHookSwitchCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                 text = if (enabled)
                     "已激活 Hook。对 LSPosed 作用域中已勾选的每个应用单独生效；在 App 内关闭此开关即可立即停止 Hook，无需重启应用。"
                 else
-                    "已暂停拦截与模拟。已勾选的应用恢复真实系统状态；随时打开此开关即可重新启用 Hook。",
+                    "已暂停拦截。已勾选的应用恢复真实系统状态；随时打开此开关即可重新启用 Hook。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -250,7 +233,7 @@ fun NfcHideCard(hidden: Boolean, onToggle: (Boolean) -> Unit) {
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "拦截 NfcAdapter、NfcManager.getDefaultAdapter() 与 PackageManager 的 NFC 特性查询。此开关独立于位置模拟，无需路线点即可生效。",
+                text = "拦截 NfcAdapter、NfcManager.getDefaultAdapter() 与 PackageManager 的 NFC 特性查询，让目标应用无法探测到 NFC 硬件。安装后默认开启。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -298,95 +281,6 @@ fun ModuleStatusCard() {
 }
 
 @Composable
-fun LocationSimCard(config: TrajectoryConfig) {
-    val context = LocalContext.current
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            CardHeader(
-                icon = Icons.Filled.Map,
-                title = "位置模拟与地点收藏",
-                trailing = {
-                    if (config.enabled) {
-                        Surface(
-                            shape = MaterialTheme.shapes.small,
-                            color = MaterialTheme.colorScheme.primary
-                        ) {
-                            Text(
-                                text = "模拟中",
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                }
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "支持 Google 卫星高清图层、地点收藏夹、真实移动轨迹现场录制回放与自定义路线规划。已勾选的应用将自动获取模拟定位。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Button(
-                onClick = {
-                    context.startActivity(Intent(context, MapActivity::class.java))
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("打开卫星地图轨迹模拟与地点收藏")
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = {
-                    context.startActivity(Intent(context, DexSqlActivity::class.java))
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("DexSQL：用 SQL 查询目标 App 的 dex")
-            }
-        }
-    }
-}
-
-@Composable
-fun HookCategoriesCard() {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            CardHeader(icon = Icons.Filled.Category, title = "拦截分类")
-            Spacer(modifier = Modifier.height(8.dp))
-
-            CategoryItem("应用定位查询 (LocationManager)", "拦截该应用内的 GPS/网络/Fused 定位查询与更新")
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            CategoryItem("Google 融合定位 (FusedLocationProviderClient)", "重写 Play 服务融合定位结果")
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            CategoryItem("包管理器 (PackageManager)", "拦截 NFC 硬件特性查询，隐藏 NFC 硬件")
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            CategoryItem("NFC 适配器 (NfcAdapter / NfcManager)", "拦截硬件适配器接口调用")
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            CategoryItem("反模拟定位检测 (Mock Provider Bypass)", "剥除 Mock 标识，各应用均识别为真实硬件定位")
-        }
-    }
-}
-
-@Composable
-private fun CategoryItem(title: String, description: String) {
-    Column(modifier = Modifier.padding(vertical = 4.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = FontWeight.Medium
-        )
-        Text(
-            text = description,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
 fun TargetAppCard() {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -415,7 +309,7 @@ fun AboutCard() {
             CardHeader(icon = Icons.Filled.Info, title = "关于")
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "基于现代 libxposed 的应用级模块。支持对选定应用隐藏 NFC 硬件、Google 卫星混合地图轨迹 GPS 位置模拟、真实物理航迹录制与地点收藏夹功能。",
+                text = "基于现代 libxposed 的应用级模块，对选定的应用隐藏 NFC 硬件。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

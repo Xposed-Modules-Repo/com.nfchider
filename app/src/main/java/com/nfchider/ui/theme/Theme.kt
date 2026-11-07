@@ -10,8 +10,6 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -107,12 +105,6 @@ private val NfcHiderShapes = Shapes(
     extraLarge = RoundedCornerShape(28.dp)
 )
 
-/**
- * 来源可用性徽章色（MapPalette 同款运行时选择，见 [BadgePalette]）。
- * 静态提供：色板本身不随重组变化，仅随暗/亮主题切换。
- */
-val LocalBadgePalette = staticCompositionLocalOf { BadgePalette.Light }
-
 @Composable
 fun NfcHiderTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
@@ -128,18 +120,10 @@ fun NfcHiderTheme(
         darkTheme -> DarkColors
         else -> LightColors
     }
-    CompositionLocalProvider(
-        LocalBadgePalette provides BadgePalette.forDark(darkTheme)
-    ) {
-        MaterialTheme(
-            colorScheme = colorScheme,
-            typography = NfcHiderTypography,
-            shapes = NfcHiderShapes,
-            content = content
-        )
-    }
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = NfcHiderTypography,
+        shapes = NfcHiderShapes,
+        content = content
+    )
 }
-
-/** 当前是否为暗色主题（供地图覆盖层选色）。 */
-@Composable
-fun isMapDark(): Boolean = isSystemInDarkTheme()

@@ -6,7 +6,7 @@ import io.github.libxposed.service.XposedServiceHelper
 import java.io.File
 
 /**
- * App-side bridge to the libxposed service: pushes the simulation config into
+ * App-side bridge to the libxposed service: pushes the NFC-hiding config into
  * remote preferences so hooked processes receive (push-)updated values.
  * When no framework service is bound, only the local file copy is written and
  * the exported [ConfigProvider] acts as the fallback channel.
@@ -63,9 +63,9 @@ object ModuleService {
 }
 
 /**
- * Persistence for the location simulation config: a JSON file in the app's
- * private storage. The same JSON is served by [ConfigProvider] and pushed to
- * remote preferences via [ModuleService].
+ * Persistence for the NFC-hiding config: a JSON file in the app's private
+ * storage. The same JSON is served by [ConfigProvider] and pushed to remote
+ * preferences via [ModuleService].
  */
 object SimConfigRepository {
 

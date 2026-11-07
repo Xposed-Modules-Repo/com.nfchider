@@ -4,7 +4,3 @@
 # Keep libxposed classes and interfaces
 -keep class io.github.libxposed.** { *; }
 -dontwarn io.github.libxposed.**
-
-# Keep osmdroid classes
--keep class org.osmdroid.** { *; }
--dontwarn org.osmdroid.**
