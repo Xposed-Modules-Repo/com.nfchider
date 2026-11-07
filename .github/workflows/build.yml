@@ -188,7 +188,7 @@ jobs:
             -H "Authorization: token ${XPOSED_REPO_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${REPO}/releases" \
-            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"draft\":false,\"prerelease\":false,\"make_latest\":true}")
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"draft\":false,\"prerelease\":false,\"make_latest\":\"true\"}")
           if [ "${http}" != "201" ]; then
             echo "::error::创建组织仓库 Release 失败 (HTTP ${http})"; cat /tmp/release.json; exit 1
           fi
