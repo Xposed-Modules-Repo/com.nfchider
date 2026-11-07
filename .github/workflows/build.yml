@@ -8,8 +8,14 @@ permissions:
   contents: write
   actions: write
 
+# 固定发布标识：Release 名、tag、APK 文件名全部使用 1-1.1。
+# 每次构建先删除旧的 1-1.1 Release 与 tag，再新建同名发布，实现「覆盖式」发布。
+env:
+  TAG: 1-1.1
+  APK: NfcHider-1-1.1.apk
+
 # 同一分支只允许一个构建实例运行：连续手动触发时排队而非并发，
-# 避免两个实例同时改版本号/建 Release/同步组织仓库造成竞态与标签冲突。
+# 避免两个实例同时删/建 Release 与标签造成竞态冲突。
 # cancel-in-progress=false：排队执行，不取消已在跑的构建（发布链路需完整跑完）。
 concurrency:
   group: build-${{ github.ref }}
@@ -42,98 +48,19 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # 自动递增版本号：查询最新 Release 标签，取 max(最新release+1, 当前+1)，
-      # 避免手动忘记改版本号导致 Release 标签冲突/覆盖。
-      # versionCode 与 versionName 联动递增：versionName = 主.次.新versionCode，
-      # 修复 versionName 曾硬编码 "1.1" 导致安装界面永远显示「版本: 1.1 -> 1.1」的问题。
-      # 个人仓库与组织仓库（发布镜像）都查询并取更大值：组织仓库的版本号同样有效；
-      # 任一仓库查询失败时输出 warning 而非静默按 0 计算——曾因静默回退重复占用
-      # 已存在的标签，而 softprops 对已存在标签是「更新」而非「新建」，
-      # 导致 Release 被覆盖、两边仓库版本错位。
-      - name: Auto-bump versionCode
-        id: get_version
-        run: |
-          set -e
-          VERSION=$(grep '^version=' module.prop | cut -d'=' -f2 | tr -d '\r')
-          CURRENT_CODE=$(grep '^versionCode=' module.prop | cut -d'=' -f2 | tr -d '\r')
-
-          # 查询指定仓库最新 Release 的 versionCode（标签格式为 code-version）
-          query_latest() {
-            curl -sS -H "Authorization: token $1" \
-              "https://api.github.com/repos/$2/releases/latest" \
-              | grep -oP '"tag_name":\s*"\K[0-9]+' | head -1
-          }
-
-          LATEST_CODE=0
-          for entry in \
-            "${{ secrets.GITHUB_TOKEN }}|${{ github.repository }}" \
-            "${{ secrets.XPOSED_REPO_TOKEN }}|Xposed-Modules-Repo/com.nfchider"; do
-            token="${entry%%|*}"
-            repo="${entry##*|}"
-            code=$(query_latest "$token" "$repo")
-            if [ -n "$code" ]; then
-              if [ "$code" -gt "$LATEST_CODE" ]; then LATEST_CODE=$code; fi
-            else
-              echo "::warning::查询 ${repo} 最新 Release 失败，本次忽略该仓库的版本信息"
-            fi
-          done
-
-          # 新版本号 = max(各仓库最新release + 1, 当前module.prop + 1)
-          NEW_CODE=$((LATEST_CODE + 1))
-          if [ "$NEW_CODE" -le "$CURRENT_CODE" ]; then
-            NEW_CODE=$((CURRENT_CODE + 1))
-          fi
-
-          # versionName 联动递增：主.次版本号沿用当前值（如 1.1），修订号 = 新 versionCode。
-          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
-          NEW_VERSION_NAME="${MAJOR_MINOR}.${NEW_CODE}"
-
-          # 标签格式：versionCode-versionName，与 Xposed-Modules-Repo 官方规范一致；
-          # 同时必须与 APK 文件名 NfcHider-${versionCode}-${versionName}.apk
-          # （archivesName）保持一致，否则 softprops 收集不到附件、Release 无 APK。
-          TAG="${NEW_CODE}-${NEW_VERSION_NAME}"
-          echo "versionCode=${NEW_CODE}" >> "$GITHUB_OUTPUT"
-          echo "version=${NEW_VERSION_NAME}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Bumping version: ${CURRENT_CODE}/${VERSION} -> ${NEW_CODE}/${NEW_VERSION_NAME} (tag: ${TAG})"
-
-          # 更新所有版本文件（versionCode 与 versionName 同步递增）。
-          # build.gradle.kts 的两条替换用正则匹配任意旧值，不再依赖 CURRENT_CODE 精确相等：
-          # 曾因 module.prop(15) 与 build.gradle.kts(16) 历史错位，按旧值替换未命中，
-          # versionCode 停留在 16 而标签已是 17，APK 名与标签不一致导致 Release 无附件。
-          # 正则替换对任意历史状态都生效，从根本上消除该类错位。
-          sed -i "s/^versionCode=.*/versionCode=${NEW_CODE}/" module.prop
-          sed -i "s/^version=.*/version=${NEW_VERSION_NAME}/" module.prop
-          sed -i "s/^versionCode=.*/versionCode=${NEW_CODE}/" app/src/main/resources/META-INF/xposed/module.prop
-          sed -i "s/^version=.*/version=${NEW_VERSION_NAME}/" app/src/main/resources/META-INF/xposed/module.prop
-          sed -i -E "s/^([[:space:]]*)versionCode[[:space:]]*=[[:space:]]*[0-9]+/\1versionCode = ${NEW_CODE}/" app/build.gradle.kts
-          sed -i -E "s/^([[:space:]]*)versionName[[:space:]]*=[[:space:]]*\"[^\"]*\"/\1versionName = \"${NEW_VERSION_NAME}\"/" app/build.gradle.kts
-
-          # 自检：三个版本文件都必须递增到新值，任一不满足立即失败（set -e），
-          # 把「静默产出无 APK 的 Release」转换为构建期显式报错。
-          grep -q "versionCode = ${NEW_CODE}" app/build.gradle.kts
-          grep -q "versionName = \"${NEW_VERSION_NAME}\"" app/build.gradle.kts
-          grep -q "^versionCode=${NEW_CODE}" module.prop
-          grep -q "^version=${NEW_VERSION_NAME}" module.prop
-          grep -q "^versionCode=${NEW_CODE}" app/src/main/resources/META-INF/xposed/module.prop
-          grep -q "^version=${NEW_VERSION_NAME}" app/src/main/resources/META-INF/xposed/module.prop
-
       - name: Build Release APK
         run: |
           ./gradlew assembleRelease --no-daemon
 
       - name: Collect APK
-        env:
-          TAG: ${{ steps.get_version.outputs.tag }}
         run: |
           set -e
           mkdir -p artifacts
-          # 统一落成与 Release 标签一致的文件名：即使产物命名与标签错位
-          # （如版本文件不同步导致 APK 名为 16-1.1.17 而标签为 17-1.1.17），
-          # 也在这里显式归一；glob 命中多个文件时 cp 直接报错，不会静默出错。
-          cp app/build/outputs/apk/release/NfcHider-*.apk "artifacts/NfcHider-${TAG}.apk"
+          # archivesName 由固定的 versionCode/versionName 生成 NfcHider-1-1.1.apk，
+          # 这里无论产物原名如何，都显式归一到固定 APK 名，避免与 TAG 错位。
+          cp app/build/outputs/apk/release/NfcHider-*.apk "artifacts/${APK}"
           ls -la artifacts/
-          test -s "artifacts/NfcHider-${TAG}.apk"
+          test -s "artifacts/${APK}"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -156,47 +83,86 @@ jobs:
           retain_days: 0
           keep_minimum_runs: 1
 
-      # 按照 Xposed-Modules-Repo 规范创建新 Release
+      # 删除两个仓库里旧的 1-1.1 Release 与同名 tag，随后重建。
+      # 用 REST API 而非 gh release delete：后者不会删除 tag，且不存在时会报错；
+      # 这里对「不存在」按成功处理，保证首次/重复运行都幂等。
+      - name: Delete old 1-1.1 release and tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          XPOSED_REPO_TOKEN: ${{ secrets.XPOSED_REPO_TOKEN }}
+        run: |
+          set -e
+          delete_one() {
+            local token="$1" repo="$2"
+            echo "--- cleaning ${repo}@${TAG} ---"
+            # 1. 删除 Release（若存在）；GitHub 不会自动删对应 tag。
+            #    先拿 HTTP 状态码 + body，404 视为「本来就没有」而非错误，
+            #    避免 grep 无匹配时被 set -e 误杀（首次构建必现）。
+            resp=$(mktemp)
+            http=$(curl -sS -o "${resp}" -w "%{http_code}" \
+              -H "Authorization: token ${token}" \
+              "https://api.github.com/repos/${repo}/releases/tags/${TAG}")
+            if [ "${http}" = "200" ]; then
+              rel_id=$(jq -r '.id' "${resp}")
+              if [ -n "${rel_id}" ] && [ "${rel_id}" != "null" ]; then
+                del=$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE \
+                  -H "Authorization: token ${token}" \
+                  "https://api.github.com/repos/${repo}/releases/${rel_id}")
+                echo "release delete: ${del}"
+                case "${del}" in 204|404) ;; *) echo "::error::删除 Release 失败 (HTTP ${del})"; rm -f "${resp}"; return 1 ;; esac
+              fi
+            else
+              echo "no release to delete (HTTP ${http})"
+            fi
+            rm -f "${resp}"
+            # 2. 删除同名 tag（若存在），对「不存在」按成功处理。
+            status=$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE \
+              -H "Authorization: token ${token}" \
+              "https://api.github.com/repos/${repo}/git/refs/tags/${TAG}")
+            echo "tag delete: ${status}"
+            case "${status}" in
+              204|404|422) ;;  # 已删除 / 本来不存在 -> 幂等成功
+              *) echo "::error::删除 ${repo} tag ${TAG} 失败 (HTTP ${status})"; return 1 ;;
+            esac
+          }
+          delete_one "${GITHUB_TOKEN}" "${{ github.repository }}"
+          if [ -n "${XPOSED_REPO_TOKEN}" ]; then
+            delete_one "${XPOSED_REPO_TOKEN}" "Xposed-Modules-Repo/com.nfchider"
+          else
+            echo "::warning::未配置 XPOSED_REPO_TOKEN，跳过组织仓库清理"
+          fi
+
+      # 按固定的 1-1.1 新建 Release（tag 不存在，softprops 会同时创建 tag 与 Release）
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.get_version.outputs.tag }}
-          name: ${{ steps.get_version.outputs.tag }}
-          files: artifacts/NfcHider-${{ steps.get_version.outputs.tag }}.apk
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          files: artifacts/${{ env.APK }}
           generate_release_notes: true
+          make_latest: true
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 将自动递增的版本号回写到仓库，避免下次构建覆盖。
-      # [skip ci] 防止提交本身再次触发工作流造成无限循环。
-      - name: Commit version bump
-        if: success()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add module.prop app/src/main/resources/META-INF/xposed/module.prop app/build.gradle.kts
-          git commit -m "ci: bump version to ${{ steps.get_version.outputs.tag }} [skip ci]"
-          git push
-
       # Xposed-Modules-Repo/com.nfchider 是发布镜像仓库：代码平时只在个人仓库
       # （furina707/com.nfchider）更新，由本仓库 CI 代为同步：
-      # 1. 全量同步代码：个人仓库完整源码树 → 组织仓库（普通提交推进，保留组织仓库历史）
-      # 2. 在组织仓库创建同名 Release 并附上 APK
+      # 1. 全量同步代码：个人仓库完整源码树 -> 组织仓库（普通提交推进，保留历史）
+      # 2. 在组织仓库创建同名 1-1.1 Release 并附上 APK（旧的已在上方清理步骤删除）
       # 需要在本仓库 Settings > Secrets 中配置 XPOSED_REPO_TOKEN（有该仓库写权限的 PAT）
       - name: Sync to Xposed-Modules-Repo
         if: success()
+        env:
+          XPOSED_REPO_TOKEN: ${{ secrets.XPOSED_REPO_TOKEN }}
         run: |
           set -e
           REPO="Xposed-Modules-Repo/com.nfchider"
-          TAG="${{ steps.get_version.outputs.tag }}"
-          APK="artifacts/NfcHider-${TAG}.apk"
 
-          # 1. 全量同步代码（含自动递增后的版本文件）。
+          # 1. 全量同步代码。
           #    --delete 保证组织仓库不残留个人仓库已删除的文件，实现真正镜像；
           #    排除 .git 与构建/临时产物；不用 force push，保留组织仓库提交历史。
-          git clone --depth 1 "https://x-access-token:${{ secrets.XPOSED_REPO_TOKEN }}@github.com/${REPO}.git" /tmp/xposed-repo
+          git clone --depth 1 "https://x-access-token:${XPOSED_REPO_TOKEN}@github.com/${REPO}.git" /tmp/xposed-repo
           rsync -a --delete \
             --exclude='.git/' \
             --exclude='artifacts/' \
@@ -216,23 +182,22 @@ jobs:
             git push
           fi
 
-          # 2. 在 Xposed-Modules-Repo 创建 Release 并上传 APK
+          # 2. 在 Xposed-Modules-Repo 创建 1-1.1 Release 并上传 APK。
           cd "${GITHUB_WORKSPACE}"
-          curl -s -X POST \
-            -H "Authorization: token ${{ secrets.XPOSED_REPO_TOKEN }}" \
+          http=$(curl -sS -o /tmp/release.json -w "%{http_code}" -X POST \
+            -H "Authorization: token ${XPOSED_REPO_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${REPO}/releases" \
-            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"draft\":false,\"prerelease\":false}" \
-            -o /tmp/release.json
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"draft\":false,\"prerelease\":false,\"make_latest\":true}")
+          if [ "${http}" != "201" ]; then
+            echo "::error::创建组织仓库 Release 失败 (HTTP ${http})"; cat /tmp/release.json; exit 1
+          fi
 
           UPLOAD_URL=$(grep -oP '"upload_url":\s*"\K[^"]+' /tmp/release.json | sed 's/{?name,label}//')
-          curl -s -X POST \
-            -H "Authorization: token ${{ secrets.XPOSED_REPO_TOKEN }}" \
+          curl -sS -X POST \
+            -H "Authorization: token ${XPOSED_REPO_TOKEN}" \
             -H "Content-Type: application/vnd.android.package-archive" \
-            "${UPLOAD_URL}?name=NfcHider-${TAG}.apk" \
-            --data-binary @"${APK}" \
+            "${UPLOAD_URL}?name=${APK}" \
+            --data-binary @"artifacts/${APK}" \
             -o /dev/null
           echo "已同步到 Xposed-Modules-Repo: ${TAG}"
-
-
-

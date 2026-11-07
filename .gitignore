@@ -1,5 +1,8 @@
 .gradle/
 .gradle-home/
+# Local-only build/validation tooling (pip-bootstrapped PyYAML), not part of the project
+.piproot/
+.pylibs/
 build/
 app/build/
 api/
