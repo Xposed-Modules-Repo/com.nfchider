@@ -28,19 +28,19 @@ public final class ConfigStore {
 
     private static final Object LOCK = new Object();
 
-    private static volatile boolean inited;
+    private static volatile XposedInterface apiRef;
     private static volatile SharedPreferences remotePrefs;
 
     /**
-     * Strong anchor for the remote-preferences listener registered in {@link #init}.
+     * Strong anchor for the remote-preferences listener registered in {@link #ensureRemote}.
      *
      * <p>libxposed's {@code RemotePreferences} keeps listeners in a
      * {@link java.util.WeakHashMap}, so a listener that is not referenced
      * anywhere else may be garbage-collected at any time. Without this anchor
-     * the push channel silently dies after a GC and switch changes never reach
-     * hooked processes until they are restarted.
+     * the push channel silently dies after a GC and config changes made in the
+     * module app never reach hooked processes until they are restarted.
      */
-    private static SharedPreferences.OnSharedPreferenceChangeListener listenerRef;
+    private static volatile SharedPreferences.OnSharedPreferenceChangeListener listenerRef;
 
     private static volatile Context appContext;
     private static volatile TrajectoryConfig cached;
@@ -50,22 +50,39 @@ public final class ConfigStore {
     }
 
     public static void init(XposedInterface api) {
-        if (inited) return;
-        try {
-            SharedPreferences prefs = api.getRemotePreferences(PREFS_GROUP);
-            SharedPreferences.OnSharedPreferenceChangeListener l = (p, key) -> {
-                if (KEY_JSON.equals(key)) readRemoteIntoCache(p);
-            };
-            listenerRef = l; // keep a strong reference; RemotePreferences holds listeners weakly
-            prefs.registerOnSharedPreferenceChangeListener(l);
-            remotePrefs = prefs;
-            readRemoteIntoCache(prefs);
-            inited = true;
-        } catch (Throwable t) {
-            // Framework without remote preferences support, or the binder simply
-            // was not ready yet. Leave `inited` false so a later package load can
-            // retry.
-            remotePrefs = null;
+        if (api == null) return;
+        apiRef = api;
+        // onPackageLoaded fires only once per package name, so a transient
+        // bind failure must be retryable later from get()/refresh().
+        ensureRemote();
+    }
+
+    /**
+     * (Re-)attach to remote preferences if we do not have them yet.
+     * Called from init() and lazily from every refresh(), so a framework binder
+     * that was not ready at package load time is picked up on a later config
+     * read instead of silently losing the push channel for the whole process.
+     */
+    private static void ensureRemote() {
+        if (remotePrefs != null) return;
+        XposedInterface api = apiRef;
+        if (api == null) return;
+        synchronized (LOCK) {
+            if (remotePrefs != null) return;
+            try {
+                SharedPreferences prefs = api.getRemotePreferences(PREFS_GROUP);
+                SharedPreferences.OnSharedPreferenceChangeListener l = (p, key) -> {
+                    if (KEY_JSON.equals(key)) readRemoteIntoCache(p);
+                };
+                listenerRef = l; // keep a strong reference; RemotePreferences holds listeners weakly
+                prefs.registerOnSharedPreferenceChangeListener(l);
+                remotePrefs = prefs;
+                readRemoteIntoCache(prefs);
+            } catch (Throwable ignored) {
+                // Framework without remote preferences support, or the binder is
+                // still not ready. Leave remotePrefs null so a later refresh retries.
+                remotePrefs = null;
+            }
         }
     }
 
@@ -78,10 +95,13 @@ public final class ConfigStore {
 
     /** Current config, or null when unavailable. Never throws. */
     public static TrajectoryConfig get() {
-        TrajectoryConfig c = cached;
-        if (c != null && SystemClock.elapsedRealtime() - lastFetchElapsed < FRESH_MS) return c;
+        long now = SystemClock.elapsedRealtime();
+        // Throttle by time only, NOT by "cached != null". When no config has ever
+        // loaded (e.g. the module app was never opened), the null cache used to
+        // force a ContentResolver.call() IPC on EVERY hook invocation.
+        if (now - lastFetchElapsed < FRESH_MS) return cached;
         synchronized (LOCK) {
-            if (cached != null && SystemClock.elapsedRealtime() - lastFetchElapsed < FRESH_MS) return cached;
+            if (SystemClock.elapsedRealtime() - lastFetchElapsed < FRESH_MS) return cached;
             refresh();
             return cached;
         }
@@ -114,9 +134,14 @@ public final class ConfigStore {
     private static void refresh() {
         lastFetchElapsed = SystemClock.elapsedRealtime();
 
+        // 0. Retry the push channel in case the framework binder was not ready
+        //    at onPackageLoaded time (that callback runs only once per package).
+        ensureRemote();
+
         // 1. Push channel first — it is the cheap one and reflects live edits.
         TrajectoryConfig pushed = null;
-        if (remotePrefs != null) pushed = readRemote(remotePrefs);
+        SharedPreferences prefs = remotePrefs;
+        if (prefs != null) pushed = readRemote(prefs);
 
         // 2. Always consult the provider too, so a stale pushed value cannot mask
         //    the file the app actually wrote. The provider reads the module app's
