@@ -1,9 +1,8 @@
 # NFC Hider
-LSPosed模块：对目标应用隐藏 NFC 硬件
-- TG公众号:https://t.me/MCCRLAB
-- Telegram：https://t.me/mccrlab707
-- Issue：https://github.com/furina707/com.nfchider
-- 仓库：https://github.com/Xposed-Modules-Repo/com.nfchider
+LSPosed模块 对目标应用隐藏 NFC 硬件
+- 联系方式 https://t.me/MCCRLAB
+- Issue https://github.com/furina707/com.nfchider
+- 仓库 https://github.com/Xposed-Modules-Repo/com.nfchider
 
 ## 功能
 
